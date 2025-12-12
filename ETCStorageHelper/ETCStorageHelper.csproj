@@ -64,9 +64,10 @@
     <Compile Include="Logging\SharePointListLogger.cs" />
     <Compile Include="Logging\ETCLogHelper.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
-  </ItemGroup>  <ItemGroup>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="App.config" />
     <None Include="packages.config" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>
-

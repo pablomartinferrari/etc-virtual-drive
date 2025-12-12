@@ -150,8 +150,16 @@ namespace ETCStorageHelper.SharePoint
                 var token = await _authManager.GetAccessTokenAsync();
                 using (var client = CreateHttpClient(token))
                 {
-                    // Increase timeout for large files
-                    client.Timeout = TimeSpan.FromSeconds(_config.TimeoutSeconds * 3);
+                    // Increase timeout for large files - calculate based on file size
+                    // Assume 1 MB/sec minimum upload speed, plus overhead
+                    var fileSizeMB = data.Length / 1024.0 / 1024.0;
+                    var calculatedTimeout = Math.Max(
+                        _config.TimeoutSeconds * 3,
+                        (int)(fileSizeMB + 120)  // File size in seconds + 2 min overhead
+                    );
+                    client.Timeout = TimeSpan.FromSeconds(calculatedTimeout);
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[SharePointClient] Large file upload timeout set to {calculatedTimeout}s for {fileSizeMB:F1} MB file");
 
                     // Step 1: Create upload session
                     var sessionUrl = $"https://graph.microsoft.com/v1.0/drives/{_driveId}/root:/{path}:/createUploadSession";

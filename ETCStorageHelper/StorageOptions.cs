@@ -133,6 +133,7 @@ namespace ETCStorageHelper
             site.ApplicationName = applicationName ?? System.Reflection.Assembly.GetEntryAssembly()?.GetName().Name ?? "Unknown";
 
             // MANDATORY: Set up centralized SharePoint logging (cannot be disabled)
+            // Note: Log list name is hardcoded in the library - consumers don't configure this
             site.Logger = Logging.SharePointListLogger.FromSite(site, "ETC Storage Logs");
 
             return site;

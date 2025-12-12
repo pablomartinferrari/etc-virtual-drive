@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
@@ -177,7 +179,11 @@ namespace ETCStorageHelper.Logging
                         if (displayName != null && displayName.Equals(_listName, StringComparison.OrdinalIgnoreCase))
                         {
                             var existingListId = list["id"].Value<string>();
-                            System.Diagnostics.Debug.WriteLine($"[SharePointListLogger] Found existing list '{_listName}' with ID: {existingListId}");
+                            Console.WriteLine($"[SharePointListLogger] Found existing list '{_listName}' with ID: {existingListId}");
+                            
+                            // Verify and add missing columns if needed
+                            await EnsureRequiredColumnsAsync(client, siteId, existingListId);
+                            
                             return existingListId;
                         }
                     }
@@ -196,25 +202,11 @@ namespace ETCStorageHelper.Logging
 
             var url = $"https://graph.microsoft.com/v1.0/sites/{siteId}/lists";
 
+            var requiredColumns = GetRequiredColumns();
             var listDefinition = new JObject
             {
                 ["displayName"] = _listName,
-                ["columns"] = new JArray
-                {
-                    new JObject { ["name"] = "Level", ["text"] = new JObject() },
-                    new JObject { ["name"] = "UserId", ["text"] = new JObject() },
-                    new JObject { ["name"] = "UserName", ["text"] = new JObject() },
-                    new JObject { ["name"] = "Operation", ["text"] = new JObject() },
-                    new JObject { ["name"] = "SiteName", ["text"] = new JObject() },
-                    new JObject { ["name"] = "Path", ["text"] = new JObject() },
-                    new JObject { ["name"] = "DestinationPath", ["text"] = new JObject() },
-                    new JObject { ["name"] = "FileSizeMB", ["number"] = new JObject() },
-                    new JObject { ["name"] = "DurationMs", ["number"] = new JObject() },
-                    new JObject { ["name"] = "Success", ["boolean"] = new JObject() },
-                    new JObject { ["name"] = "ErrorMessage", ["text"] = new JObject() },
-                    new JObject { ["name"] = "MachineName", ["text"] = new JObject() },
-                    new JObject { ["name"] = "ApplicationName", ["text"] = new JObject() }
-                }
+                ["columns"] = new JArray(requiredColumns)
             };
 
             var content = new StringContent(listDefinition.ToString(), Encoding.UTF8, "application/json");
@@ -290,6 +282,92 @@ namespace ETCStorageHelper.Logging
 
             System.Diagnostics.Debug.WriteLine(
                 $"[SharePointListLogger] Logged to SharePoint: {entry.Operation} by {entry.UserName}");
+        }
+
+        /// <summary>
+        /// Get required column definitions for the SharePoint list
+        /// </summary>
+        private List<JObject> GetRequiredColumns()
+        {
+            return new List<JObject>
+            {
+                new JObject { ["name"] = "Level", ["text"] = new JObject() },
+                new JObject { ["name"] = "UserId", ["text"] = new JObject() },
+                new JObject { ["name"] = "UserName", ["text"] = new JObject() },
+                new JObject { ["name"] = "Operation", ["text"] = new JObject() },
+                new JObject { ["name"] = "SiteName", ["text"] = new JObject() },
+                new JObject { ["name"] = "Path", ["text"] = new JObject() },
+                new JObject { ["name"] = "DestinationPath", ["text"] = new JObject() },
+                new JObject { ["name"] = "FileSizeMB", ["number"] = new JObject() },
+                new JObject { ["name"] = "DurationMs", ["number"] = new JObject() },
+                new JObject { ["name"] = "Success", ["boolean"] = new JObject() },
+                new JObject { ["name"] = "ErrorMessage", ["text"] = new JObject() },
+                new JObject { ["name"] = "MachineName", ["text"] = new JObject() },
+                new JObject { ["name"] = "ApplicationName", ["text"] = new JObject() }
+            };
+        }
+
+        /// <summary>
+        /// Ensure all required columns exist in the list, create missing ones
+        /// </summary>
+        private async Task EnsureRequiredColumnsAsync(HttpClient client, string siteId, string listId)
+        {
+            var url = $"https://graph.microsoft.com/v1.0/sites/{siteId}/lists/{listId}/columns";
+            var response = await client.GetAsync(url);
+            
+            if (!response.IsSuccessStatusCode)
+            {
+                Console.WriteLine($"[SharePointListLogger] Warning: Could not verify columns: {response.StatusCode}");
+                return; // Don't fail if we can't check columns
+            }
+
+            var json = JObject.Parse(await response.Content.ReadAsStringAsync());
+            var existingColumns = json["value"] as JArray;
+            var existingColumnNames = new HashSet<string>(
+                existingColumns.Select(c => c["name"]?.Value<string>()).Where(n => n != null),
+                StringComparer.OrdinalIgnoreCase
+            );
+
+            // Get required columns
+            var requiredColumns = GetRequiredColumns();
+            var missingColumns = requiredColumns
+                .Where(col => !existingColumnNames.Contains(col["name"].Value<string>()))
+                .ToList();
+
+            if (missingColumns.Count == 0)
+            {
+                Console.WriteLine($"[SharePointListLogger] ✓ All required columns exist in list '{_listName}'");
+                return;
+            }
+
+            Console.WriteLine($"[SharePointListLogger] Found {missingColumns.Count} missing column(s) in list '{_listName}', adding them...");
+
+            // Add each missing column
+            foreach (var column in missingColumns)
+            {
+                var columnName = column["name"].Value<string>();
+                try
+                {
+                    var content = new StringContent(column.ToString(), Encoding.UTF8, "application/json");
+                    var addResponse = await client.PostAsync(url, content);
+
+                    if (addResponse.IsSuccessStatusCode)
+                    {
+                        Console.WriteLine($"[SharePointListLogger] ✓ Added column '{columnName}' to list '{_listName}'");
+                    }
+                    else
+                    {
+                        var error = await addResponse.Content.ReadAsStringAsync();
+                        Console.WriteLine($"[SharePointListLogger] ⚠ Failed to add column '{columnName}': {error}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[SharePointListLogger] ⚠ Error adding column '{columnName}': {ex.Message}");
+                }
+            }
+
+            Console.WriteLine($"[SharePointListLogger] ✓ Column verification complete for list '{_listName}'");
         }
     }
 }
