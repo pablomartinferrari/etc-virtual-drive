@@ -44,18 +44,20 @@ namespace ETCStorageHelper.Resilience
                     var delay = CalculateDelay(attempt);
                     
                     // Log retry attempt (could be enhanced with proper logging framework)
+                    var inner = ex.InnerException != null ? $" | Inner: {ex.InnerException.GetType().Name}: {ex.InnerException.Message}" : string.Empty;
                     System.Diagnostics.Debug.WriteLine(
                         $"[RetryPolicy] {operationName} failed (attempt {attempt}/{_maxRetries}). " +
-                        $"Error: {ex.Message}. Retrying in {delay}ms...");
+                        $"Error: {ex.GetType().Name}: {ex.Message}{inner}. Retrying in {delay}ms...");
 
                     await Task.Delay(delay);
                 }
                 catch (Exception ex)
                 {
                     // Non-transient error or max retries exceeded
+                    var inner = ex.InnerException != null ? $" | Inner: {ex.InnerException.GetType().Name}: {ex.InnerException.Message}" : string.Empty;
                     throw new Exception(
                         $"{operationName} failed after {attempt} attempt(s). " +
-                        $"Last error: {ex.Message}", ex);
+                        $"Last error: {ex.GetType().Name}: {ex.Message}{inner}", ex);
                 }
             }
 

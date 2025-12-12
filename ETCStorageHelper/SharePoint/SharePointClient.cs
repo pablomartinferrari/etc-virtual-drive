@@ -477,8 +477,30 @@ namespace ETCStorageHelper.SharePoint
 
         private HttpClient CreateHttpClient(string accessToken)
         {
-            var client = new HttpClient();
-            client.Timeout = TimeSpan.FromSeconds(_config.TimeoutSeconds);
+            // Ensure TLS 1.2 for corporate environments
+            System.Net.ServicePointManager.SecurityProtocol |= System.Net.SecurityProtocolType.Tls12;
+
+            var handler = new HttpClientHandler
+            {
+                // Follow redirects and decompress automatically
+                AllowAutoRedirect = true,
+                AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
+                UseProxy = true
+            };
+
+            // Honor system proxy with default credentials when present
+            var systemProxy = System.Net.WebRequest.DefaultWebProxy;
+            if (systemProxy != null)
+            {
+                systemProxy.Credentials = System.Net.CredentialCache.DefaultNetworkCredentials;
+                handler.Proxy = systemProxy;
+            }
+
+            var client = new HttpClient(handler)
+            {
+                Timeout = TimeSpan.FromSeconds(Math.Max(_config.TimeoutSeconds, 120))
+            };
+
             client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
             return client;
         }

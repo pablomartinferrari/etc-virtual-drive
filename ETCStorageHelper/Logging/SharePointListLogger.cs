@@ -110,16 +110,31 @@ namespace ETCStorageHelper.Logging
         {
             var token = await _authManager.GetAccessTokenAsync();
 
-            using (var client = new HttpClient())
+            // Ensure TLS 1.2 and proxy-friendly client for corporate networks
+            System.Net.ServicePointManager.SecurityProtocol |= System.Net.SecurityProtocolType.Tls12;
+            var handler = new HttpClientHandler
             {
-                client.DefaultRequestHeaders.Authorization = 
+                AllowAutoRedirect = true,
+                AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
+                UseProxy = true
+            };
+            var systemProxy = System.Net.WebRequest.DefaultWebProxy;
+            if (systemProxy != null)
+            {
+                systemProxy.Credentials = System.Net.CredentialCache.DefaultNetworkCredentials;
+                handler.Proxy = systemProxy;
+            }
+
+            using (var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(120) })
+            {
+                client.DefaultRequestHeaders.Authorization =
                     new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
                 client.DefaultRequestHeaders.Accept.Add(
                     new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
 
                 // Get site ID
                 var siteId = await GetSiteIdAsync(client);
-                
+
                 // Get list ID
                 var listId = await GetOrCreateListAsync(client, siteId);
 
