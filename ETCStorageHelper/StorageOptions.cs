@@ -1,5 +1,6 @@
 using System;
 using ETCStorageHelper.Caching;
+using ETCStorageHelper.Configuration;
 using ETCStorageHelper.Logging;
 
 namespace ETCStorageHelper
@@ -67,6 +68,11 @@ namespace ETCStorageHelper
         public int RetryAttempts { get; set; } = 3;
 
         /// <summary>
+        /// Cloud environment (Commercial, GCCHigh, or DoD). Defaults to Commercial.
+        /// </summary>
+        public CloudEnvironment Environment { get; set; } = CloudEnvironment.Commercial;
+
+        /// <summary>
         /// Caching configuration (default: enabled with 1GB cache, 24-hour expiration)
         /// </summary>
         public CacheConfig CacheConfig { get; set; } = new CacheConfig();
@@ -126,6 +132,13 @@ namespace ETCStorageHelper
                 System.Configuration.ConfigurationManager.AppSettings[$"{configPrefix}.SiteUrl"],
                 System.Configuration.ConfigurationManager.AppSettings[$"{configPrefix}.LibraryName"]
             );
+
+            // Parse cloud environment (default to Commercial)
+            var envString = System.Configuration.ConfigurationManager.AppSettings[$"{configPrefix}.Environment"] ?? "Commercial";
+            if (Enum.TryParse<CloudEnvironment>(envString, ignoreCase: true, out var environment))
+            {
+                site.Environment = environment;
+            }
 
             // Set user/app info for logging (REQUIRED)
             site.UserId = userId;

@@ -41,7 +41,8 @@ namespace ETCStorageHelper
                     SiteUrl = site.SiteUrl,
                     LibraryName = site.LibraryName,
                     TimeoutSeconds = site.TimeoutSeconds,
-                    RetryAttempts = site.RetryAttempts
+                    RetryAttempts = site.RetryAttempts,
+                    Environment = site.Environment
                 };
 
                 _clients[site.Name] = new SharePointClient(config);
