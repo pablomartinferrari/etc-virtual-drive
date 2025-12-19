@@ -24,6 +24,11 @@ namespace ETCStorageHelper.SharePoint
         private string _siteId;
         private string _driveId;
 
+        /// <summary>
+        /// Gets the Graph API base URL (e.g., https://graph.microsoft.com or https://graph.microsoft.us)
+        /// </summary>
+        private string GraphUrl => $"{_config.GraphBaseUrl}/v1.0";
+
         public SharePointClient(ETCStorageConfig config)
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
@@ -55,18 +60,39 @@ namespace ETCStorageHelper.SharePoint
                     var sitePath = uri.AbsolutePath; // e.g., /sites/etc-dev-projects
 
                     // Get site ID
-                    var siteResponse = await client.GetAsync($"https://graph.microsoft.com/v1.0/sites/{hostname}:{sitePath}");
+                    var graphSiteUrl = $"{GraphUrl}/sites/{hostname}:{sitePath}";
+                    Console.WriteLine($"[SharePoint] Environment: {_config.Environment}");
+                    Console.WriteLine($"[SharePoint] Graph Base URL: {_config.GraphBaseUrl}");
+                    Console.WriteLine($"[SharePoint] Site URL from config: {_config.SiteUrl}");
+                    Console.WriteLine($"[SharePoint] Parsed hostname: {hostname}");
+                    Console.WriteLine($"[SharePoint] Parsed site path: {sitePath}");
+                    Console.WriteLine($"[SharePoint] Calling Graph API: {graphSiteUrl}");
+                    System.Diagnostics.Debug.WriteLine($"[SharePointClient] Graph URL: {graphSiteUrl}");
+                    
+                    var siteResponse = await client.GetAsync(graphSiteUrl);
                     if (!siteResponse.IsSuccessStatusCode)
                     {
                         var error = await siteResponse.Content.ReadAsStringAsync();
-                        throw new Exception($"Failed to get site info: {siteResponse.StatusCode} - {error}");
+                        var errorMessage = $"Failed to get site info: {siteResponse.StatusCode} - {error}";
+                        
+                        // Provide helpful error messages for common issues
+                        if (siteResponse.StatusCode == System.Net.HttpStatusCode.BadRequest && error.Contains("Invalid hostname"))
+                        {
+                            errorMessage += $"\n\n⚠ The site URL '{_config.SiteUrl}' does not belong to tenant '{_config.TenantId}'.";
+                            errorMessage += $"\n   Please verify:";
+                            errorMessage += $"\n   1. The Site URL is correct";
+                            errorMessage += $"\n   2. The Tenant ID matches the tenant that owns the SharePoint site";
+                            errorMessage += $"\n   3. The site exists and is accessible";
+                        }
+                        
+                        throw new Exception(errorMessage);
                     }
 
                     var siteJson = JObject.Parse(await siteResponse.Content.ReadAsStringAsync());
                     _siteId = siteJson["id"].Value<string>();
 
                     // Get drive ID (document library)
-                    var drivesResponse = await client.GetAsync($"https://graph.microsoft.com/v1.0/sites/{_siteId}/drives");
+                    var drivesResponse = await client.GetAsync($"{GraphUrl}/sites/{_siteId}/drives");
                     if (!drivesResponse.IsSuccessStatusCode)
                     {
                         var error = await drivesResponse.Content.ReadAsStringAsync();
@@ -126,7 +152,7 @@ namespace ETCStorageHelper.SharePoint
                 var token = await _authManager.GetAccessTokenAsync();
                 using (var client = CreateHttpClient(token))
                 {
-                    var url = $"https://graph.microsoft.com/v1.0/drives/{_driveId}/root:/{path}:/content";
+                    var url = $"{GraphUrl}/drives/{_driveId}/root:/{path}:/content";
                     
                     var content = new ByteArrayContent(data);
                     var response = await client.PutAsync(url, content);
@@ -162,7 +188,7 @@ namespace ETCStorageHelper.SharePoint
                         $"[SharePointClient] Large file upload timeout set to {calculatedTimeout}s for {fileSizeMB:F1} MB file");
 
                     // Step 1: Create upload session
-                    var sessionUrl = $"https://graph.microsoft.com/v1.0/drives/{_driveId}/root:/{path}:/createUploadSession";
+                    var sessionUrl = $"{GraphUrl}/drives/{_driveId}/root:/{path}:/createUploadSession";
                     var sessionBody = new JObject
                     {
                         ["item"] = new JObject
@@ -235,7 +261,7 @@ namespace ETCStorageHelper.SharePoint
                 using (var client = CreateHttpClient(token))
                 {
                     // First, get the file metadata to get the download URL
-                    var url = $"https://graph.microsoft.com/v1.0/drives/{_driveId}/root:/{path}";
+                    var url = $"{GraphUrl}/drives/{_driveId}/root:/{path}";
                     var response = await client.GetAsync(url);
 
                     if (!response.IsSuccessStatusCode)
@@ -269,7 +295,7 @@ namespace ETCStorageHelper.SharePoint
             var token = await _authManager.GetAccessTokenAsync();
             using (var client = CreateHttpClient(token))
             {
-                var url = $"https://graph.microsoft.com/v1.0/drives/{_driveId}/root:/{path}";
+                var url = $"{GraphUrl}/drives/{_driveId}/root:/{path}";
                 var response = await client.GetAsync(url);
 
                 return response.IsSuccessStatusCode;
@@ -286,7 +312,7 @@ namespace ETCStorageHelper.SharePoint
             var token = await _authManager.GetAccessTokenAsync();
             using (var client = CreateHttpClient(token))
             {
-                var url = $"https://graph.microsoft.com/v1.0/drives/{_driveId}/root:/{path}";
+                var url = $"{GraphUrl}/drives/{_driveId}/root:/{path}";
                 var response = await client.DeleteAsync(url);
 
                 if (!response.IsSuccessStatusCode && response.StatusCode != System.Net.HttpStatusCode.NotFound)
@@ -307,7 +333,7 @@ namespace ETCStorageHelper.SharePoint
             var token = await _authManager.GetAccessTokenAsync();
             using (var client = CreateHttpClient(token))
             {
-                var url = $"https://graph.microsoft.com/v1.0/drives/{_driveId}/root:/{path}";
+                var url = $"{GraphUrl}/drives/{_driveId}/root:/{path}";
                 var response = await client.DeleteAsync(url);
 
                 if (!response.IsSuccessStatusCode && response.StatusCode != System.Net.HttpStatusCode.NotFound)
@@ -339,7 +365,7 @@ namespace ETCStorageHelper.SharePoint
                         currentPath = string.IsNullOrEmpty(currentPath) ? part : $"{currentPath}/{part}";
 
                         // Check if folder exists
-                        var checkUrl = $"https://graph.microsoft.com/v1.0/drives/{_driveId}/root:/{currentPath}";
+                        var checkUrl = $"{GraphUrl}/drives/{_driveId}/root:/{currentPath}";
                         var checkResponse = await client.GetAsync(checkUrl);
 
                         if (checkResponse.IsSuccessStatusCode)
@@ -347,8 +373,8 @@ namespace ETCStorageHelper.SharePoint
 
                         // Create folder
                         var createUrl = string.IsNullOrEmpty(parentPath)
-                            ? $"https://graph.microsoft.com/v1.0/drives/{_driveId}/root/children"
-                            : $"https://graph.microsoft.com/v1.0/drives/{_driveId}/root:/{parentPath}:/children";
+                            ? $"{GraphUrl}/drives/{_driveId}/root/children"
+                            : $"{GraphUrl}/drives/{_driveId}/root:/{parentPath}:/children";
 
                         var folderData = new JObject
                         {
@@ -384,7 +410,7 @@ namespace ETCStorageHelper.SharePoint
             var token = await _authManager.GetAccessTokenAsync();
             using (var client = CreateHttpClient(token))
             {
-                var url = $"https://graph.microsoft.com/v1.0/drives/{_driveId}/root:/{path}";
+                var url = $"{GraphUrl}/drives/{_driveId}/root:/{path}";
                 var response = await client.GetAsync(url);
 
                 if (!response.IsSuccessStatusCode)
@@ -406,8 +432,8 @@ namespace ETCStorageHelper.SharePoint
             using (var client = CreateHttpClient(token))
             {
                 var url = string.IsNullOrEmpty(path)
-                    ? $"https://graph.microsoft.com/v1.0/drives/{_driveId}/root/children"
-                    : $"https://graph.microsoft.com/v1.0/drives/{_driveId}/root:/{path}:/children";
+                    ? $"{GraphUrl}/drives/{_driveId}/root/children"
+                    : $"{GraphUrl}/drives/{_driveId}/root:/{path}:/children";
 
                 var response = await client.GetAsync(url);
 
@@ -434,7 +460,7 @@ namespace ETCStorageHelper.SharePoint
             var token = await _authManager.GetAccessTokenAsync();
             using (var client = CreateHttpClient(token))
             {
-                var url = $"https://graph.microsoft.com/v1.0/drives/{_driveId}/root:/{path}";
+                var url = $"{GraphUrl}/drives/{_driveId}/root:/{path}";
                 var response = await client.GetAsync(url);
 
                 if (!response.IsSuccessStatusCode)
@@ -459,8 +485,8 @@ namespace ETCStorageHelper.SharePoint
             using (var client = CreateHttpClient(token))
             {
                 var url = string.IsNullOrEmpty(path)
-                    ? $"https://graph.microsoft.com/v1.0/drives/{_driveId}/root"
-                    : $"https://graph.microsoft.com/v1.0/drives/{_driveId}/root:/{path}";
+                    ? $"{GraphUrl}/drives/{_driveId}/root"
+                    : $"{GraphUrl}/drives/{_driveId}/root:/{path}";
 
                 var response = await client.GetAsync(url);
 

@@ -18,7 +18,13 @@ namespace ETCStorageHelper.Logging
     {
         private readonly string _siteUrl;
         private readonly string _listName;
+        private readonly ETCStorageConfig _config;
         private readonly Authentication.AuthenticationManager _authManager;
+
+        /// <summary>
+        /// Gets the Graph API base URL (e.g., https://graph.microsoft.com or https://graph.microsoft.us)
+        /// </summary>
+        private string GraphUrl => $"{_config.GraphBaseUrl}/v1.0";
 
         /// <summary>
         /// Creates a SharePoint list logger
@@ -28,7 +34,9 @@ namespace ETCStorageHelper.Logging
         /// <param name="tenantId">Azure AD Tenant ID</param>
         /// <param name="clientId">Azure AD Client ID</param>
         /// <param name="clientSecret">Azure AD Client Secret</param>
-        public SharePointListLogger(string siteUrl, string listName, string tenantId, string clientId, string clientSecret)
+        /// <param name="environment">Cloud environment (Commercial, GCCHigh, or DoD). Defaults to Commercial.</param>
+        public SharePointListLogger(string siteUrl, string listName, string tenantId, string clientId, string clientSecret, 
+            CloudEnvironment environment = CloudEnvironment.Commercial)
         {
             _siteUrl = siteUrl ?? throw new ArgumentNullException(nameof(siteUrl));
             _listName = listName ?? throw new ArgumentNullException(nameof(listName));
@@ -36,16 +44,17 @@ namespace ETCStorageHelper.Logging
             // Create config for authentication
             // NOTE: TimeoutSeconds MUST be > 0 or HttpClient will throw when setting Timeout.
             // We use a sensible default here that is independent of any app.config settings.
-            var config = new ETCStorageConfig
+            _config = new ETCStorageConfig
             {
                 TenantId = tenantId ?? throw new ArgumentNullException(nameof(tenantId)),
                 ClientId = clientId ?? throw new ArgumentNullException(nameof(clientId)),
                 ClientSecret = clientSecret ?? throw new ArgumentNullException(nameof(clientSecret)),
                 TimeoutSeconds = 60,
-                RetryAttempts = 3
+                RetryAttempts = 3,
+                Environment = environment
             };
 
-            _authManager = new Authentication.AuthenticationManager(config);
+            _authManager = new Authentication.AuthenticationManager(_config);
         }
 
         /// <summary>
@@ -58,7 +67,8 @@ namespace ETCStorageHelper.Logging
                 listName,
                 site.TenantId,
                 site.ClientId,
-                site.ClientSecret
+                site.ClientSecret,
+                site.Environment
             );
         }
 
@@ -148,7 +158,7 @@ namespace ETCStorageHelper.Logging
             var hostname = new Uri(_siteUrl).Host;
             var sitePath = new Uri(_siteUrl).AbsolutePath;
             
-            var url = $"https://graph.microsoft.com/v1.0/sites/{hostname}:{sitePath}";
+            var url = $"{GraphUrl}/sites/{hostname}:{sitePath}";
             
             System.Diagnostics.Debug.WriteLine($"[SharePointListLogger] Getting site ID for: {_siteUrl}");
             System.Diagnostics.Debug.WriteLine($"[SharePointListLogger] Graph API URL: {url}");
@@ -178,7 +188,7 @@ namespace ETCStorageHelper.Logging
         private async Task<string> GetOrCreateListAsync(HttpClient client, string siteId)
         {
             // Try to get existing list (get all lists and filter in code - $filter doesn't work reliably)
-            var url = $"https://graph.microsoft.com/v1.0/sites/{siteId}/lists";
+            var url = $"{GraphUrl}/sites/{siteId}/lists";
             var response = await client.GetAsync(url);
 
             if (response.IsSuccessStatusCode)
@@ -215,7 +225,7 @@ namespace ETCStorageHelper.Logging
             System.Diagnostics.Debug.WriteLine(msg);
             Console.WriteLine(msg); // Also write to console
 
-            var url = $"https://graph.microsoft.com/v1.0/sites/{siteId}/lists";
+            var url = $"{GraphUrl}/sites/{siteId}/lists";
 
             var requiredColumns = GetRequiredColumns();
             var listDefinition = new JObject
@@ -246,7 +256,7 @@ namespace ETCStorageHelper.Logging
 
         private async Task AddListItemAsync(HttpClient client, string siteId, string listId, LogEntry entry)
         {
-            var url = $"https://graph.microsoft.com/v1.0/sites/{siteId}/lists/{listId}/items";
+            var url = $"{GraphUrl}/sites/{siteId}/lists/{listId}/items";
 
             // DEBUG: Log all entry values
             Console.WriteLine($"[DEBUG] Entry values:");
@@ -327,7 +337,7 @@ namespace ETCStorageHelper.Logging
         /// </summary>
         private async Task EnsureRequiredColumnsAsync(HttpClient client, string siteId, string listId)
         {
-            var url = $"https://graph.microsoft.com/v1.0/sites/{siteId}/lists/{listId}/columns";
+            var url = $"{GraphUrl}/sites/{siteId}/lists/{listId}/columns";
             var response = await client.GetAsync(url);
             
             if (!response.IsSuccessStatusCode)

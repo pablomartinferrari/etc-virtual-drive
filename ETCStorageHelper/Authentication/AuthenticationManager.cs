@@ -51,7 +51,16 @@ namespace ETCStorageHelper.Authentication
 
         private async Task<TokenResponse> AcquireTokenAsync()
         {
-            var tokenEndpoint = $"https://login.microsoftonline.com/{_config.TenantId}/oauth2/v2.0/token";
+            var tokenEndpoint = $"{_config.LoginBaseUrl}/{_config.TenantId}/oauth2/v2.0/token";
+            
+            // Log the endpoints being used for debugging
+            System.Diagnostics.Debug.WriteLine($"[AuthenticationManager] Environment: {_config.Environment}");
+            System.Diagnostics.Debug.WriteLine($"[AuthenticationManager] Token endpoint: {tokenEndpoint}");
+            System.Diagnostics.Debug.WriteLine($"[AuthenticationManager] Graph scope: {_config.GraphScope}");
+            System.Diagnostics.Debug.WriteLine($"[AuthenticationManager] Graph base URL: {_config.GraphBaseUrl}");
+            Console.WriteLine($"[Auth] Environment: {_config.Environment}");
+            Console.WriteLine($"[Auth] Login: {_config.LoginBaseUrl}");
+            Console.WriteLine($"[Auth] Graph: {_config.GraphBaseUrl}");
             
             using (var client = new HttpClient())
             {
@@ -59,7 +68,7 @@ namespace ETCStorageHelper.Authentication
 
                 var content = new StringContent(
                     $"client_id={Uri.EscapeDataString(_config.ClientId)}" +
-                    $"&scope=https://graph.microsoft.com/.default" +
+                    $"&scope={Uri.EscapeDataString(_config.GraphScope)}" +
                     $"&client_secret={Uri.EscapeDataString(_config.ClientSecret)}" +
                     $"&grant_type=client_credentials",
                     Encoding.UTF8,
@@ -71,9 +80,11 @@ namespace ETCStorageHelper.Authentication
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    throw new Exception($"Failed to acquire access token: {response.StatusCode} - {responseContent}");
+                    throw new Exception($"Failed to acquire access token from {tokenEndpoint}: {response.StatusCode} - {responseContent}");
                 }
 
+                Console.WriteLine($"[Auth] ✓ Token acquired successfully from {_config.LoginBaseUrl}");
+                
                 var json = JObject.Parse(responseContent);
                 return new TokenResponse
                 {
