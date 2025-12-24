@@ -72,6 +72,34 @@ namespace ETCStorageHelper
         }
 
         /// <summary>
+        /// Get files in a directory with file information (name, modified date, size, etc.)
+        /// Use this method when you need to sort by modified date or access file metadata.
+        /// </summary>
+        /// <param name="path">Directory path</param>
+        /// <param name="site">SharePoint site to list from</param>
+        /// <param name="searchPattern">Optional wildcard pattern to filter files (e.g., "*.pdf", "report*", "*.txt"). If null or empty, returns all files.</param>
+        /// <returns>Array of ETCFileInfo objects with file metadata</returns>
+        /// <example>
+        /// // Get files and sort by modified date descending (newest first)
+        /// var files = ETCDirectory.GetFilesWithInfo("ClientA/Job001", site);
+        /// var sorted = files.OrderByDescending(f => f.LastModified).ToArray();
+        /// </example>
+        public static ETCFileInfo[] GetFilesWithInfo(string path, SharePointSite site, string searchPattern = null)
+        {
+            var client = ETCFile.GetClientInternal(site);
+            var items = RunAsync(() => client.ListDirectoryWithInfoAsync(NormalizePath(path)));
+            
+            // If no search pattern provided, return all entries
+            if (string.IsNullOrWhiteSpace(searchPattern))
+            {
+                return items.ToArray();
+            }
+            
+            // Filter entries using wildcard matching
+            return items.Where(item => MatchesWildcard(Path.GetFileName(item.Name), searchPattern)).ToArray();
+        }
+
+        /// <summary>
         /// Get subdirectories (simplified - returns all entries)
         /// Note: SharePoint API doesn't easily distinguish files from folders without additional calls
         /// </summary>

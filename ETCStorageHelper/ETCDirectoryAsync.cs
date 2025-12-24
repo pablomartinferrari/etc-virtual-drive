@@ -166,6 +166,41 @@ namespace ETCStorageHelper
         }
 
         /// <summary>
+        /// Get files in a directory with file information (async)
+        /// Use this method when you need to sort by modified date or access file metadata.
+        /// </summary>
+        /// <param name="path">Directory path</param>
+        /// <param name="site">SharePoint site to list from</param>
+        /// <param name="searchPattern">Optional wildcard pattern to filter files (e.g., "*.pdf", "report*", "*.txt"). If null or empty, returns all files.</param>
+        /// <returns>Task that returns array of ETCFileInfo objects with file metadata</returns>
+        /// <example>
+        /// // Get files and sort by modified date descending (newest first)
+        /// var files = await ETCDirectoryAsync.GetFilesWithInfoAsync("ClientA/Job001", site);
+        /// var sorted = files.OrderByDescending(f => f.LastModified).ToArray();
+        /// </example>
+        public static async Task<ETCFileInfo[]> GetFilesWithInfoAsync(string path, SharePointSite site, string searchPattern = null)
+        {
+            if (path == null)
+                throw new ArgumentNullException(nameof(path));
+            if (site == null)
+                throw new ArgumentNullException(nameof(site));
+
+            site.Validate();
+
+            var client = ETCFile.GetOrCreateClient(site);
+            var items = await client.ListDirectoryWithInfoAsync(path);
+            
+            // If no search pattern provided, return all entries
+            if (string.IsNullOrWhiteSpace(searchPattern))
+            {
+                return items.ToArray();
+            }
+            
+            // Filter entries using wildcard matching
+            return items.Where(item => MatchesWildcard(Path.GetFileName(item.Name), searchPattern)).ToArray();
+        }
+
+        /// <summary>
         /// Get subdirectories (async)
         /// Note: SharePoint API doesn't easily distinguish files from folders without additional calls
         /// </summary>
