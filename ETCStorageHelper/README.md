@@ -1,6 +1,6 @@
 # ETC Storage Helper
 
-**Version 1.0.0** | .NET Framework 4.6
+**Version 1.1.0** | .NET Framework 4.6
 
 SharePoint storage abstraction for ETC desktop applications. Write files to SharePoint using the same familiar API as `File.ReadAllBytes` / `File.WriteAllBytes`.
 
@@ -17,6 +17,7 @@ SharePoint storage abstraction for ETC desktop applications. Write files to Shar
 - ✅ **Thread-Safe Token Caching** - Efficient authentication with auto-refresh
 - ✅ **Large File Support** - Chunked upload for files 100MB+ (up to 250GB)
 - ✅ **SharePoint URL Retrieval** - Get direct links for "Open in SharePoint" buttons
+- ✅ **Wildcard Search Patterns** - Filter files by extension or name pattern (e.g., "*.pdf", "report*")
 - ✅ **Binary File Support** - Read/write PDFs, Excel, images, and any file type
 - ✅ **Production Ready** - Enterprise-grade reliability and error handling
 
@@ -297,6 +298,42 @@ Client Projects/
     └── DoD Site/
 ```
 
+### Filtering Files with Wildcard Patterns
+
+You can filter files by extension or name pattern using wildcard search patterns:
+
+```csharp
+// Get all PDF files
+string[] pdfFiles = ETCDirectory.GetFiles("ClientA/Job001/Reports", site, "*.pdf");
+// Returns: ["report.pdf", "document.pdf", "summary.pdf"]
+
+// Get all files starting with "report"
+string[] reportFiles = ETCDirectory.GetFiles("ClientA/Job001", site, "report*");
+// Returns: ["report.pdf", "report1.docx", "report2.docx"]
+
+// Get all Excel files
+string[] excelFiles = ETCDirectory.GetFiles("ClientA/Job001", site, "*.xlsx");
+// Returns: ["data.xlsx", "summary.xlsx"]
+
+// Get files with single character wildcard (e.g., "test1.txt", "testA.txt")
+string[] testFiles = ETCDirectory.GetFiles("ClientA/Job001", site, "test?.txt");
+// Returns: ["test1.txt", "testA.txt"]
+
+// Async version
+string[] txtFiles = await ETCDirectoryAsync.GetFilesAsync("ClientA/Job001", site, "*.txt");
+
+// No pattern = get all files (backward compatible)
+string[] allFiles = ETCDirectory.GetFiles("ClientA/Job001", site);
+// or
+string[] allFiles2 = ETCDirectory.GetFiles("ClientA/Job001", site, null);
+```
+
+**Wildcard Patterns:**
+- `*` - Matches any sequence of characters (e.g., `*.pdf`, `report*`)
+- `?` - Matches exactly one character (e.g., `test?.txt` matches `test1.txt` but not `test12.txt`)
+- Matching is case-insensitive
+- Pattern is applied to the filename only (not the full path)
+
 ---
 
 ## 🛡️ Resilience & Retry Features
@@ -394,6 +431,7 @@ var site = SharePointSite.FromConfig("SiteName", "ConfigPrefix");
 | `CreateDirectory(path, site)`      | Create directory (with all parent folders) |
 | `Exists(path, site)`               | Check if directory exists                  |
 | `GetFiles(path, site)`             | List files in directory                    |
+| `GetFiles(path, site, searchPattern)` | List files matching wildcard pattern (e.g., "*.pdf", "report*") |
 | `GetDirectories(path, site)`       | List subdirectories                        |
 | `GetFileSystemEntries(path, site)` | List all items                             |
 | `GetFolderUrl(path, site)`         | Get SharePoint web URL for folder          |
