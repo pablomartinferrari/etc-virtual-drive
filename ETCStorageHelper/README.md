@@ -1,6 +1,6 @@
 # ETC Storage Helper
 
-**Version 1.1.0** | .NET Framework 4.6
+**Version 1.2.0** | .NET Framework 4.6
 
 SharePoint storage abstraction for ETC desktop applications. Write files to SharePoint using the same familiar API as `File.ReadAllBytes` / `File.WriteAllBytes`.
 
@@ -334,6 +334,45 @@ string[] allFiles2 = ETCDirectory.GetFiles("ClientA/Job001", site, null);
 - Matching is case-insensitive
 - Pattern is applied to the filename only (not the full path)
 
+### Getting Files with Metadata (for Sorting)
+
+When you need to sort files by modified date or access file metadata (size, folder status), use `GetFilesWithInfo`:
+
+```csharp
+// Get files with metadata (name, modified date, size, etc.)
+ETCFileInfo[] files = ETCDirectory.GetFilesWithInfo("ClientA/Job001", site);
+
+// Sort by modified date descending (newest first)
+var sorted = files
+    .Where(f => !f.IsFolder)  // Filter out folders if needed
+    .OrderByDescending(f => f.LastModified)
+    .ToArray();
+
+// Sort by name
+var sortedByName = files.OrderBy(f => f.Name).ToArray();
+
+// Sort by size (largest first)
+var sortedBySize = files
+    .Where(f => f.Size.HasValue)
+    .OrderByDescending(f => f.Size.Value)
+    .ToArray();
+
+// Filter with wildcard pattern and sort
+var pdfFiles = ETCDirectory.GetFilesWithInfo("ClientA/Job001", site, "*.pdf");
+var newestPdf = pdfFiles.OrderByDescending(f => f.LastModified).FirstOrDefault();
+
+// Async version
+var filesAsync = await ETCDirectoryAsync.GetFilesWithInfoAsync("ClientA/Job001", site);
+var sortedAsync = filesAsync.OrderByDescending(f => f.LastModified).ToArray();
+```
+
+**ETCFileInfo Properties:**
+- `Name` (string) - File name
+- `LastModified` (DateTime) - Last modified date/time in UTC
+- `Size` (long?) - File size in bytes (null for folders)
+- `IsFolder` (bool) - Whether this item is a folder
+- `FullPath` (string) - Full path to the file
+
 ---
 
 ## 🛡️ Resilience & Retry Features
@@ -432,6 +471,7 @@ var site = SharePointSite.FromConfig("SiteName", "ConfigPrefix");
 | `Exists(path, site)`               | Check if directory exists                  |
 | `GetFiles(path, site)`             | List files in directory                    |
 | `GetFiles(path, site, searchPattern)` | List files matching wildcard pattern (e.g., "*.pdf", "report*") |
+| `GetFilesWithInfo(path, site, searchPattern)` | List files with metadata (name, modified date, size) - use for sorting |
 | `GetDirectories(path, site)`       | List subdirectories                        |
 | `GetFileSystemEntries(path, site)` | List all items                             |
 | `GetFolderUrl(path, site)`         | Get SharePoint web URL for folder          |

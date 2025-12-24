@@ -451,6 +451,66 @@ namespace ETCStorageHelper.SharePoint
         }
 
         /// <summary>
+        /// List files and folders in a directory with file information (name, modified date, size)
+        /// </summary>
+        public async Task<List<ETCFileInfo>> ListDirectoryWithInfoAsync(string path)
+        {
+            await InitializeAsync();
+            
+            var token = await _authManager.GetAccessTokenAsync();
+            using (var client = CreateHttpClient(token))
+            {
+                var url = string.IsNullOrEmpty(path)
+                    ? $"{GraphUrl}/drives/{_driveId}/root/children"
+                    : $"{GraphUrl}/drives/{_driveId}/root:/{path}:/children";
+
+                var response = await client.GetAsync(url);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    var error = await response.Content.ReadAsStringAsync();
+                    throw new DirectoryNotFoundException($"Directory '{path}' not found: {response.StatusCode} - {error}");
+                }
+
+                var json = JObject.Parse(await response.Content.ReadAsStringAsync());
+                var items = json["value"].Children<JObject>();
+                
+                var fileInfos = new List<ETCFileInfo>();
+                foreach (var item in items)
+                {
+                    var fileInfo = new ETCFileInfo
+                    {
+                        Name = item["name"]?.Value<string>() ?? "",
+                        IsFolder = item["folder"] != null,
+                        FullPath = string.IsNullOrEmpty(path) 
+                            ? item["name"]?.Value<string>() ?? ""
+                            : $"{path}/{item["name"]?.Value<string>() ?? ""}"
+                    };
+
+                    // Parse last modified date
+                    if (item["lastModifiedDateTime"] != null)
+                    {
+                        var dateStr = item["lastModifiedDateTime"].Value<string>();
+                        if (DateTime.TryParse(dateStr, out DateTime lastModified))
+                        {
+                            fileInfo.LastModified = lastModified.ToUniversalTime();
+                        }
+                    }
+
+                    // Parse file size
+                    if (item["size"] != null && !fileInfo.IsFolder)
+                    {
+                        fileInfo.Size = item["size"].Value<long>();
+                    }
+
+                    fileInfos.Add(fileInfo);
+                }
+                
+                return fileInfos;
+            }
+        }
+
+        /// <summary>
         /// Get the SharePoint web URL for a file
         /// </summary>
         public async Task<string> GetFileUrlAsync(string path)

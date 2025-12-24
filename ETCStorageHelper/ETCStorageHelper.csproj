@@ -48,6 +48,7 @@
   <ItemGroup>
     <Compile Include="ETCFile.cs" />
     <Compile Include="ETCFileAsync.cs" />
+    <Compile Include="ETCFileInfo.cs" />
     <Compile Include="ETCDirectory.cs" />
     <Compile Include="ETCDirectoryAsync.cs" />
     <Compile Include="ETCPath.cs" />
@@ -66,10 +67,9 @@
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="distrubute\ETCStorageHelper.1.2.0.nupkg" />
     <None Include="packages.config" />
   </ItemGroup>
-  <ItemGroup>
-    <Folder Include="distrubute\" />
-  </ItemGroup>
+  <ItemGroup />
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>
