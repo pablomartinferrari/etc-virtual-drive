@@ -1,6 +1,6 @@
 # ETC Storage Helper
 
-**Version 1.2.0** | .NET Framework 4.6
+**Version 1.4.1** | .NET Framework 4.6
 
 SharePoint storage abstraction for ETC desktop applications. Write files to SharePoint using the same familiar API as `File.ReadAllBytes` / `File.WriteAllBytes`.
 
@@ -13,6 +13,7 @@ SharePoint storage abstraction for ETC desktop applications. Write files to Shar
 - ✅ **Azure AD Authentication** - Secure service principal authentication
 - ✅ **Multi-Site Support** - Route to Commercial, GCC High, or custom SharePoint sites
 - ✅ **Automatic Directory Creation** - Parent folders created automatically on write
+- ✅ **Move & Rename Operations** 🆕 - Rename or move files and folders
 - ✅ **Retry with Exponential Backoff** - Automatic retry on transient failures
 - ✅ **Thread-Safe Token Caching** - Efficient authentication with auto-refresh
 - ✅ **Large File Support** - Chunked upload for files 100MB+ (up to 250GB)
@@ -195,6 +196,20 @@ if (ETCFile.Exists(path, _site))
 ETCFile.Delete(path, _site);
 ```
 
+### Move or Rename a File
+
+```csharp
+// Rename a file in place
+string oldPath = ETCPath.Combine("Environmental", clientName, "2025", $"Job{jobNumber}", "Reports", "draft-report.pdf");
+string newPath = ETCPath.Combine("Environmental", clientName, "2025", $"Job{jobNumber}", "Reports", "final-report.pdf");
+ETCFile.Move(oldPath, newPath, _site);
+
+// Move a file to a different folder
+string sourcePath = ETCPath.Combine("Environmental", "ClientA", "2025", "Job12345", "Reports", "report.pdf");
+string destPath = ETCPath.Combine("Environmental", "ClientB", "2025", "Job67890", "Reports", "report.pdf");
+ETCFile.Move(sourcePath, destPath, _site);
+```
+
 ### Get SharePoint URL (for "Open in SharePoint" buttons)
 
 ```csharp
@@ -334,6 +349,105 @@ string[] allFiles2 = ETCDirectory.GetFiles("ClientA/Job001", site, null);
 - Matching is case-insensitive
 - Pattern is applied to the filename only (not the full path)
 
+### Moving and Renaming Files (v1.3.0+)
+
+Version 1.3.0 adds the ability to rename or move files. Version 1.4.0 adds `overwrite` parameter for System.IO compatibility:
+
+```csharp
+// Example 1: Rename a file in place
+string oldPath = ETCPath.Combine("ClientA", "Job001", "Reports", "draft-report.pdf");
+string newPath = ETCPath.Combine("ClientA", "Job001", "Reports", "final-report.pdf");
+ETCFile.Move(oldPath, newPath, site);
+
+// Example 2: Move a file to a different folder
+string sourcePath = ETCPath.Combine("ClientA", "Job001", "Drafts", "report.pdf");
+string destPath = ETCPath.Combine("ClientA", "Job001", "Finals", "report.pdf");
+ETCFile.Move(sourcePath, destPath, site);
+
+// Example 3: Move with overwrite (v1.4.0+) - Mimics System.IO.File.Move behavior
+// If destination exists, this will overwrite it
+ETCFile.Move(sourcePath, destPath, site, overwrite: true);
+
+// Example 4: Check before moving (prevents overwrite)
+if (!ETCFile.Exists(destPath, site))
+{
+    ETCFile.Move(sourcePath, destPath, site);
+}
+else
+{
+    Console.WriteLine("Destination already exists!");
+}
+
+// Example 5: Move and rename at the same time
+string source = ETCPath.Combine("ClientA", "Job001", "Temp", "data.xlsx");
+string dest = ETCPath.Combine("ClientB", "Job002", "Analysis", "processed-data.xlsx");
+ETCFile.Move(source, dest, site);
+
+// Example 6: Move file between different SharePoint sites
+ETCFile.Move(
+    "ClientA/report.pdf", commercialSite,
+    "ClientA/report.pdf", gccHighSite,
+    overwrite: false  // Fails if destination exists
+);
+
+// Async version (returns immediately, completes in background)
+var handle = ETCFileAsync.MoveAsync(
+    sourcePath, destPath, site,
+    overwrite: true,  // Overwrite if exists
+    onSuccess: path => Console.WriteLine($"Move completed: {path}"),
+    onError: (path, ex) => Console.WriteLine($"Move failed: {ex.Message}")
+);
+```
+
+**Overwrite Behavior (v1.4.0+):**
+- ✅ `overwrite: false` (default) - Fails if destination exists (matches .NET Framework File.Move)
+- ✅ `overwrite: true` - Replaces destination if it exists (matches .NET Core 3.0+ File.Move)
+- ✅ Source file is removed after successful move (unlike `Copy` which keeps both)
+- ✅ Destination parent folders are created automatically if needed
+- ✅ Cross-site moves also support overwrite parameter
+
+### Moving or Renaming Folders (v1.3.0+)
+
+You can also move or rename entire folders (all nested content moves automatically). Version 1.4.0 adds `overwrite` support:
+
+```csharp
+// Example 1: Rename a folder in place
+string oldPath = ETCPath.Combine("ClientA", "2025", "Job12345-Draft");
+string newPath = ETCPath.Combine("ClientA", "2025", "Job12345-Final");
+ETCDirectory.Move(oldPath, newPath, site);
+
+// Example 2: Move folder to different parent
+string sourcePath = ETCPath.Combine("ClientA", "Archive", "OldProjects");
+string destPath = ETCPath.Combine("Archive", "2024", "OldProjects");
+ETCDirectory.Move(sourcePath, destPath, site);
+
+// Example 3: Move with overwrite (v1.4.0+)
+// If destination folder exists, this will replace it
+ETCDirectory.Move(sourcePath, destPath, site, overwrite: true);
+
+// Example 4: Reorganize project structure
+// Move from: Environmental/ClientA/Job001
+// To:        ClientA/Environmental/Job001
+string source = ETCPath.Combine("Environmental", "ClientA", "Job001");
+string dest = ETCPath.Combine("ClientA", "Environmental", "Job001");
+ETCDirectory.Move(source, dest, site);
+
+// Async version (useful for folders with lots of files)
+var handle = ETCDirectoryAsync.MoveAsync(
+    sourcePath, destPath, site,
+    overwrite: true,  // Overwrite if exists
+    onSuccess: path => Console.WriteLine($"Folder move completed: {path}"),
+    onError: (path, ex) => Console.WriteLine($"Folder move failed: {ex.Message}")
+);
+```
+
+**Important:**
+- ✅ All nested files and subfolders are preserved and moved together
+- ✅ Folder hierarchy is maintained during the move
+- ✅ Source folder is removed after successful move
+- ✅ This is a true move operation (not copy-then-delete)
+- ✅ `overwrite: true` (v1.4.0+) replaces destination folder if it exists
+
 ### Getting Files with Metadata (for Sorting)
 
 When you need to sort files by modified date or access file metadata (size, folder status), use `GetFilesWithInfo`:
@@ -461,6 +575,8 @@ var site = SharePointSite.FromConfig("SiteName", "ConfigPrefix");
 | `Delete(path, site)`                   | Delete a file                                   |
 | `Copy(source, dest, site)`             | Copy a file within same site                    |
 | `Copy(source, srcSite, dest, dstSite)` | Copy file between different sites               |
+| `Move(source, dest, site, overwrite)` 🆕 v1.4.0 | Rename or move a file (overwrite optional)          |
+| `Move(source, srcSite, dest, dstSite, overwrite)` 🆕 v1.4.0 | Move file between sites (overwrite optional)            |
 | `GetFileUrl(path, site)`               | Get SharePoint web URL for file                 |
 
 ### ETCDirectory Methods
@@ -474,6 +590,7 @@ var site = SharePointSite.FromConfig("SiteName", "ConfigPrefix");
 | `GetFilesWithInfo(path, site, searchPattern)` | List files with metadata (name, modified date, size) - use for sorting |
 | `GetDirectories(path, site)`       | List subdirectories                        |
 | `GetFileSystemEntries(path, site)` | List all items                             |
+| `Move(source, dest, site, overwrite)` 🆕 v1.4.0 | Rename or move folder (overwrite optional, preserves nested content) |
 | `GetFolderUrl(path, site)`         | Get SharePoint web URL for folder          |
 
 ### ETCPath Methods
@@ -758,10 +875,56 @@ Error: The operation has timed out. Retrying in 1023ms...
 
 ## 📝 Version History
 
+### v1.4.1 (December 2025)
+
+- 🐛 **Bug Fix: Enhanced Retry Policy** - Improved resilience for network errors
+- ✅ Increased initial retry delay from 1s → **2s** (better connection recovery)
+- ✅ Increased max retry delay from 30s → **60s** (handles severe issues)
+- ✅ Total retry time: ~6 seconds vs previous ~3 seconds
+- ✅ Exponential backoff delays: 2s → 4s → 8s (with random jitter)
+- ✅ More resilient against: connection drops, network timeouts, transient errors
+- ✅ No API changes - fully backward compatible
+
+### v1.4.0 (December 2025)
+
+- 🆕 **Overwrite Support** - Optional `overwrite` parameter for all Move operations
+- 🆕 Mimics `System.IO.File.Move()` behavior (matches .NET Core 3.0+ functionality)
+- 🆕 `ETCFile.Move(..., overwrite: true)` - Overwrites if file exists
+- 🆕 `ETCDirectory.Move(..., overwrite: true)` - Overwrites if folder exists
+- 🆕 Async versions also support overwrite parameter
+- ✅ Default `overwrite: false` prevents accidental data loss (matches .NET Framework)
+- ✅ Cross-site moves support overwrite parameter
+- ✅ Fully backward compatible - existing Move() calls work unchanged
+
+### v1.3.0 (December 2025)
+
+- 🆕 **File Move/Rename** - `ETCFile.Move()` and `ETCFileAsync.MoveAsync()`
+- 🆕 **Folder Move/Rename** - `ETCDirectory.Move()` and `ETCDirectoryAsync.MoveAsync()`
+- 🆕 Rename files/folders in place (e.g., "draft.pdf" → "final.pdf")
+- 🆕 Move files/folders to different parent directories
+- 🆕 Cross-site moves supported (move files between SharePoint sites)
+- 🆕 Async versions with callbacks for background operations
+- ✅ Nested folder content preserved automatically during moves
+- ✅ Fully backward compatible - all existing operations unchanged
+
+### v1.2.0 (December 2025)
+
+- 🆕 **File Metadata and Sorting** - `ETCFileInfo` class with metadata
+- 🆕 `GetFilesWithInfo()` - Returns files with modified date, size, folder status
+- ✅ Sort files by modified date, name, or size
+- ✅ Works with wildcard search patterns
+
+### v1.1.0 (December 2025)
+
+- 🆕 **Wildcard Search Patterns** - Filter files by extension or pattern
+- 🆕 Supports `*` (any sequence) and `?` (single character)
+- ✅ Examples: "*.pdf", "report*", "test?.txt"
+- ✅ Case-insensitive pattern matching
+
 ### v1.0.0 (December 2025)
 
 - ✅ Initial release
-- ✅ SharePoint Commercial support
+- ✅ SharePoint Commercial & GCC High support
 - ✅ Multi-site routing
 - ✅ Automatic directory creation
 - ✅ Retry with exponential backoff

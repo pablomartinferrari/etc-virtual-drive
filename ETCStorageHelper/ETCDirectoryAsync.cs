@@ -233,6 +233,70 @@ namespace ETCStorageHelper
         }
 
         /// <summary>
+        /// Rename or move a folder asynchronously (returns immediately, operation happens in background)
+        /// Can be used to rename a folder or move it to a different parent folder.
+        /// </summary>
+        /// <param name="sourcePath">Current path to folder (e.g., "ClientA/OldName")</param>
+        /// <param name="destinationPath">New path for folder (e.g., "ClientA/NewName" or "ClientB/NewName")</param>
+        /// <param name="site">SharePoint site</param>
+        /// <param name="overwrite">If true, overwrites existing folder at destination. If false, throws error if folder exists.</param>
+        /// <param name="onSuccess">Optional callback when move completes</param>
+        /// <param name="onError">Optional callback if move fails</param>
+        /// <returns>Upload handle to track status</returns>
+        /// <example>
+        /// // Rename a folder in place
+        /// var handle = ETCDirectoryAsync.MoveAsync("ClientA/OldFolderName", "ClientA/NewFolderName", site);
+        /// 
+        /// // Move with overwrite and callbacks
+        /// var handle = ETCDirectoryAsync.MoveAsync(
+        ///     "ClientA/Draft", 
+        ///     "ClientA/Final", 
+        ///     site,
+        ///     overwrite: true,
+        ///     onSuccess: path => Console.WriteLine($"Moved: {path}"),
+        ///     onError: (path, ex) => Console.WriteLine($"Failed: {path} - {ex.Message}")
+        /// );
+        /// </example>
+        public static UploadHandle MoveAsync(
+            string sourcePath,
+            string destinationPath,
+            SharePointSite site,
+            bool overwrite = false,
+            Action<string> onSuccess = null,
+            Action<string, Exception> onError = null)
+        {
+            if (sourcePath == null)
+                throw new ArgumentNullException(nameof(sourcePath));
+            if (destinationPath == null)
+                throw new ArgumentNullException(nameof(destinationPath));
+            if (site == null)
+                throw new ArgumentNullException(nameof(site));
+
+            site.Validate();
+
+            var queue = GetOrCreateUploadQueue(site);
+
+            // Queue move operation and return immediately
+            var handle = queue.QueueUpload(
+                destinationPath,
+                null,  // No data for move
+                async (p, d) =>
+                {
+                    // This runs in background thread
+                    var client = ETCFile.GetOrCreateClient(site);
+                    await client.RenameFolderAsync(sourcePath, destinationPath, overwrite);
+                },
+                onSuccess,
+                onError
+            );
+
+            System.Diagnostics.Debug.WriteLine(
+                $"[ETCDirectoryAsync] Queued folder move: {sourcePath} -> {destinationPath} (overwrite: {overwrite}) - Operation ID: {handle.UploadId}");
+
+            return handle;
+        }
+
+        /// <summary>
         /// Wait for all pending operations for a specific site to complete
         /// </summary>
         public static void WaitForOperations(SharePointSite site, int timeoutSeconds = 300)

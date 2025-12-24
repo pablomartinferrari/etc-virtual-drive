@@ -240,6 +240,60 @@ namespace ETCStorageHelper
             return RunAsync(() => client.GetFileUrlAsync(NormalizePath(path)));
         }
 
+        /// <summary>
+        /// Rename or move a file to a new location.
+        /// Can be used to rename a file or move it to a different folder.
+        /// All operations are logged with user information for audit trail.
+        /// </summary>
+        /// <param name="sourceFileName">Current path to file (e.g., "ClientA/report.pdf")</param>
+        /// <param name="destFileName">New path for file (e.g., "ClientA/renamed.pdf" or "ClientB/report.pdf")</param>
+        /// <param name="site">SharePoint site</param>
+        /// <param name="overwrite">If true, overwrites existing file at destination (like File.Move in .NET Core 3.0+). If false, throws error if file exists (like File.Move in .NET Framework).</param>
+        /// <example>
+        /// // Rename a file in place
+        /// ETCFile.Move("ClientA/oldname.pdf", "ClientA/newname.pdf", site);
+        /// 
+        /// // Move a file to a different folder
+        /// ETCFile.Move("ClientA/report.pdf", "ClientB/report.pdf", site);
+        /// 
+        /// // Move with overwrite if destination exists
+        /// ETCFile.Move("ClientA/draft.pdf", "ClientA/final.pdf", site, overwrite: true);
+        /// </example>
+        public static void Move(string sourceFileName, string destFileName, SharePointSite site, bool overwrite = false)
+        {
+            ETCLogHelper.LogOperation(
+                site,
+                "MoveFile",
+                sourceFileName,
+                () => {
+                    var client = GetClient(site);
+                    RunAsync(() => client.RenameFileAsync(NormalizePath(sourceFileName), NormalizePath(destFileName), overwrite));
+                },
+                destinationPath: destFileName
+            );
+        }
+
+        /// <summary>
+        /// Move a file between different sites
+        /// </summary>
+        /// <param name="sourceFileName">Source file path</param>
+        /// <param name="sourceSite">Source SharePoint site</param>
+        /// <param name="destFileName">Destination file path</param>
+        /// <param name="destSite">Destination SharePoint site</param>
+        /// <param name="overwrite">If true, overwrites existing file at destination. If false, throws error if file exists.</param>
+        public static void Move(string sourceFileName, SharePointSite sourceSite, 
+                               string destFileName, SharePointSite destSite, bool overwrite = false)
+        {
+            // For cross-site moves, we need to copy then delete
+            if (!overwrite && Exists(destFileName, destSite))
+            {
+                throw new IOException($"File '{destFileName}' already exists at destination. Set overwrite=true to replace it.");
+            }
+            
+            Copy(sourceFileName, sourceSite, destFileName, destSite);
+            Delete(sourceFileName, sourceSite);
+        }
+
         private static string NormalizePath(string path)
         {
             if (string.IsNullOrWhiteSpace(path))

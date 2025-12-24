@@ -35,8 +35,8 @@ namespace ETCStorageHelper.SharePoint
             _authManager = new AuthenticationManager(config);
             _retryPolicy = new RetryPolicy(
                 maxRetries: config.RetryAttempts,
-                initialDelayMs: 1000,
-                maxDelayMs: 30000
+                initialDelayMs: 2000,    // Increased from 1000ms for better network recovery
+                maxDelayMs: 60000        // Increased from 30000ms for severe issues
             );
         }
 
@@ -559,6 +559,182 @@ namespace ETCStorageHelper.SharePoint
                 var json = JObject.Parse(await response.Content.ReadAsStringAsync());
                 return json["webUrl"].Value<string>();
             }
+        }
+
+        /// <summary>
+        /// Rename or move a folder to a new path
+        /// </summary>
+        /// <param name="sourcePath">Source folder path</param>
+        /// <param name="destinationPath">Destination folder path</param>
+        /// <param name="overwriteIfExists">If true, overwrites existing folder at destination. If false, throws error if folder exists.</param>
+        public async Task RenameFolderAsync(string sourcePath, string destinationPath, bool overwriteIfExists = false)
+        {
+            await InitializeAsync();
+
+            await _retryPolicy.ExecuteAsync(async () =>
+            {
+                var token = await _authManager.GetAccessTokenAsync();
+                using (var client = CreateHttpClient(token))
+                {
+                    // Parse destination path into parent folder and new name
+                    var destParts = destinationPath.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
+                    var newName = destParts[destParts.Length - 1];
+                    var parentPath = destParts.Length > 1 
+                        ? string.Join("/", destParts.Take(destParts.Length - 1))
+                        : "";
+
+                    // Build the PATCH request
+                    var url = $"{GraphUrl}/drives/{_driveId}/root:/{sourcePath}";
+                    
+                    var updateData = new JObject
+                    {
+                        ["name"] = newName
+                    };
+
+                    // Set conflict behavior (mimics System.IO.Directory.Move behavior)
+                    if (overwriteIfExists)
+                    {
+                        updateData["@microsoft.graph.conflictBehavior"] = "replace";
+                    }
+                    else
+                    {
+                        updateData["@microsoft.graph.conflictBehavior"] = "fail";
+                    }
+
+                    // If moving to a different parent folder, include parentReference
+                    if (!string.IsNullOrEmpty(parentPath))
+                    {
+                        // Get the parent folder's ID
+                        var parentUrl = $"{GraphUrl}/drives/{_driveId}/root:/{parentPath}";
+                        var parentResponse = await client.GetAsync(parentUrl);
+                        
+                        if (!parentResponse.IsSuccessStatusCode)
+                        {
+                            var parentError = await parentResponse.Content.ReadAsStringAsync();
+                            throw new DirectoryNotFoundException($"Destination parent folder '{parentPath}' not found: {parentResponse.StatusCode} - {parentError}");
+                        }
+
+                        var parentJson = JObject.Parse(await parentResponse.Content.ReadAsStringAsync());
+                        var parentId = parentJson["id"].Value<string>();
+
+                        updateData["parentReference"] = new JObject
+                        {
+                            ["id"] = parentId
+                        };
+                    }
+                    else
+                    {
+                        // Moving to root - set parent to the drive root
+                        updateData["parentReference"] = new JObject
+                        {
+                            ["id"] = _driveId,
+                            ["path"] = $"/drives/{_driveId}/root"
+                        };
+                    }
+
+                    var content = new StringContent(updateData.ToString(), Encoding.UTF8, "application/json");
+                    var request = new HttpRequestMessage(new HttpMethod("PATCH"), url)
+                    {
+                        Content = content
+                    };
+
+                    var response = await client.SendAsync(request);
+
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        var error = await response.Content.ReadAsStringAsync();
+                        throw new Exception($"Failed to rename/move folder from '{sourcePath}' to '{destinationPath}': {response.StatusCode} - {error}");
+                    }
+                }
+            }, $"Rename/move folder from '{sourcePath}' to '{destinationPath}'");
+        }
+
+        /// <summary>
+        /// Rename or move a file to a new path
+        /// </summary>
+        /// <param name="sourcePath">Source file path</param>
+        /// <param name="destinationPath">Destination file path</param>
+        /// <param name="overwriteIfExists">If true, overwrites existing file at destination. If false, throws error if file exists.</param>
+        public async Task RenameFileAsync(string sourcePath, string destinationPath, bool overwriteIfExists = false)
+        {
+            await InitializeAsync();
+
+            await _retryPolicy.ExecuteAsync(async () =>
+            {
+                var token = await _authManager.GetAccessTokenAsync();
+                using (var client = CreateHttpClient(token))
+                {
+                    // Parse destination path into parent folder and new name
+                    var destParts = destinationPath.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
+                    var newName = destParts[destParts.Length - 1];
+                    var parentPath = destParts.Length > 1 
+                        ? string.Join("/", destParts.Take(destParts.Length - 1))
+                        : "";
+
+                    // Build the PATCH request
+                    var url = $"{GraphUrl}/drives/{_driveId}/root:/{sourcePath}";
+                    
+                    var updateData = new JObject
+                    {
+                        ["name"] = newName
+                    };
+
+                    // Set conflict behavior (mimics System.IO.File.Move behavior)
+                    if (overwriteIfExists)
+                    {
+                        updateData["@microsoft.graph.conflictBehavior"] = "replace";
+                    }
+                    else
+                    {
+                        updateData["@microsoft.graph.conflictBehavior"] = "fail";
+                    }
+
+                    // If moving to a different parent folder, include parentReference
+                    if (!string.IsNullOrEmpty(parentPath))
+                    {
+                        // Get the parent folder's ID
+                        var parentUrl = $"{GraphUrl}/drives/{_driveId}/root:/{parentPath}";
+                        var parentResponse = await client.GetAsync(parentUrl);
+                        
+                        if (!parentResponse.IsSuccessStatusCode)
+                        {
+                            var parentError = await parentResponse.Content.ReadAsStringAsync();
+                            throw new DirectoryNotFoundException($"Destination parent folder '{parentPath}' not found: {parentResponse.StatusCode} - {parentError}");
+                        }
+
+                        var parentJson = JObject.Parse(await parentResponse.Content.ReadAsStringAsync());
+                        var parentId = parentJson["id"].Value<string>();
+
+                        updateData["parentReference"] = new JObject
+                        {
+                            ["id"] = parentId
+                        };
+                    }
+                    else
+                    {
+                        // Moving to root - set parent to the drive root
+                        updateData["parentReference"] = new JObject
+                        {
+                            ["id"] = _driveId,
+                            ["path"] = $"/drives/{_driveId}/root"
+                        };
+                    }
+
+                    var content = new StringContent(updateData.ToString(), Encoding.UTF8, "application/json");
+                    var request = new HttpRequestMessage(new HttpMethod("PATCH"), url)
+                    {
+                        Content = content
+                    };
+
+                    var response = await client.SendAsync(request);
+
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        var error = await response.Content.ReadAsStringAsync();
+                        throw new Exception($"Failed to rename/move file from '{sourcePath}' to '{destinationPath}': {response.StatusCode} - {error}");
+                    }
+                }
+            }, $"Rename/move file from '{sourcePath}' to '{destinationPath}'");
         }
 
         private HttpClient CreateHttpClient(string accessToken)

@@ -15,7 +15,7 @@ namespace ETCStorageHelper.Resilience
         private readonly int _initialDelayMs;
         private readonly int _maxDelayMs;
 
-        public RetryPolicy(int maxRetries = 3, int initialDelayMs = 1000, int maxDelayMs = 30000)
+        public RetryPolicy(int maxRetries = 3, int initialDelayMs = 2000, int maxDelayMs = 60000)
         {
             _maxRetries = maxRetries;
             _initialDelayMs = initialDelayMs;

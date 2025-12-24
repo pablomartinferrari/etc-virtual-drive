@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Text;
 using System.Threading.Tasks;
 using ETCStorageHelper.Caching;
@@ -310,6 +311,141 @@ namespace ETCStorageHelper
 
             var client = ETCFile.GetOrCreateClient(site);
             return await client.GetFileUrlAsync(path);
+        }
+
+        /// <summary>
+        /// Rename or move a file asynchronously (returns immediately, operation happens in background)
+        /// Can be used to rename a file or move it to a different folder.
+        /// </summary>
+        /// <param name="sourceFileName">Current path to file (e.g., "ClientA/report.pdf")</param>
+        /// <param name="destFileName">New path for file (e.g., "ClientA/renamed.pdf" or "ClientB/report.pdf")</param>
+        /// <param name="site">SharePoint site</param>
+        /// <param name="overwrite">If true, overwrites existing file at destination. If false, throws error if file exists.</param>
+        /// <param name="onSuccess">Optional callback when move completes</param>
+        /// <param name="onError">Optional callback if move fails</param>
+        /// <returns>Upload handle to track status</returns>
+        /// <example>
+        /// // Rename a file in place
+        /// var handle = ETCFileAsync.MoveAsync("ClientA/oldname.pdf", "ClientA/newname.pdf", site);
+        /// 
+        /// // Move with overwrite and callbacks
+        /// var handle = ETCFileAsync.MoveAsync(
+        ///     "ClientA/draft.pdf", 
+        ///     "ClientA/final.pdf", 
+        ///     site,
+        ///     overwrite: true,
+        ///     onSuccess: path => Console.WriteLine($"Moved: {path}"),
+        ///     onError: (path, ex) => Console.WriteLine($"Failed: {path} - {ex.Message}")
+        /// );
+        /// </example>
+        public static UploadHandle MoveAsync(
+            string sourceFileName,
+            string destFileName,
+            SharePointSite site,
+            bool overwrite = false,
+            Action<string> onSuccess = null,
+            Action<string, Exception> onError = null)
+        {
+            if (sourceFileName == null)
+                throw new ArgumentNullException(nameof(sourceFileName));
+            if (destFileName == null)
+                throw new ArgumentNullException(nameof(destFileName));
+            if (site == null)
+                throw new ArgumentNullException(nameof(site));
+
+            site.Validate();
+
+            var queue = GetOrCreateUploadQueue(site);
+
+            // Queue move operation and return immediately
+            var handle = queue.QueueUpload(
+                destFileName,
+                null,  // No data for move
+                async (p, d) =>
+                {
+                    // This runs in background thread
+                    var client = ETCFile.GetOrCreateClient(site);
+                    await client.RenameFileAsync(sourceFileName, destFileName, overwrite);
+                },
+                onSuccess,
+                onError
+            );
+
+            System.Diagnostics.Debug.WriteLine(
+                $"[ETCFileAsync] Queued file move: {sourceFileName} -> {destFileName} (overwrite: {overwrite}) - Operation ID: {handle.UploadId}");
+
+            return handle;
+        }
+
+        /// <summary>
+        /// Move a file between different sites asynchronously
+        /// </summary>
+        /// <param name="sourceFileName">Source file path</param>
+        /// <param name="sourceSite">Source SharePoint site</param>
+        /// <param name="destFileName">Destination file path</param>
+        /// <param name="destSite">Destination SharePoint site</param>
+        /// <param name="overwrite">If true, overwrites existing file at destination. If false, throws error if file exists.</param>
+        /// <param name="onSuccess">Optional callback when move completes</param>
+        /// <param name="onError">Optional callback if move fails</param>
+        /// <returns>Upload handle to track status</returns>
+        public static UploadHandle MoveAsync(
+            string sourceFileName,
+            SharePointSite sourceSite,
+            string destFileName,
+            SharePointSite destSite,
+            bool overwrite = false,
+            Action<string> onSuccess = null,
+            Action<string, Exception> onError = null)
+        {
+            if (sourceFileName == null)
+                throw new ArgumentNullException(nameof(sourceFileName));
+            if (sourceSite == null)
+                throw new ArgumentNullException(nameof(sourceSite));
+            if (destFileName == null)
+                throw new ArgumentNullException(nameof(destFileName));
+            if (destSite == null)
+                throw new ArgumentNullException(nameof(destSite));
+
+            sourceSite.Validate();
+            destSite.Validate();
+
+            var queue = GetOrCreateUploadQueue(destSite);
+
+            // For cross-site moves, we need to copy then delete
+            var handle = queue.QueueUpload(
+                destFileName,
+                null,  // Data will be read during move
+                async (p, d) =>
+                {
+                    // This runs in background thread
+                    // Check for existing file if overwrite is false
+                    if (!overwrite)
+                    {
+                        var destClient = ETCFile.GetOrCreateClient(destSite);
+                        bool exists = await destClient.FileExistsAsync(destFileName);
+                        if (exists)
+                        {
+                            throw new IOException($"File '{destFileName}' already exists at destination. Set overwrite=true to replace it.");
+                        }
+                    }
+                    
+                    // Step 1: Copy to destination
+                    var data = ETCFile.ReadAllBytes(sourceFileName, sourceSite);
+                    var destClient2 = ETCFile.GetOrCreateClient(destSite);
+                    await destClient2.UploadFileAsync(destFileName, data);
+                    
+                    // Step 2: Delete from source
+                    var sourceClient = ETCFile.GetOrCreateClient(sourceSite);
+                    await sourceClient.DeleteFileAsync(sourceFileName);
+                },
+                onSuccess,
+                onError
+            );
+
+            System.Diagnostics.Debug.WriteLine(
+                $"[ETCFileAsync] Queued cross-site move: {sourceFileName} ({sourceSite.Name}) -> {destFileName} ({destSite.Name}) (overwrite: {overwrite}) - Operation ID: {handle.UploadId}");
+
+            return handle;
         }
 
         /// <summary>

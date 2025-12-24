@@ -135,6 +135,31 @@ namespace ETCStorageHelper
             return RunAsync(() => client.GetFolderUrlAsync(NormalizePath(path)));
         }
 
+        /// <summary>
+        /// Rename or move a folder to a new location.
+        /// Can be used to rename a folder or move it to a different parent folder.
+        /// All operations are logged with user information for audit trail.
+        /// </summary>
+        /// <param name="sourcePath">Current path to folder (e.g., "ClientA/OldName")</param>
+        /// <param name="destinationPath">New path for folder (e.g., "ClientA/NewName" or "ClientB/NewName")</param>
+        /// <param name="site">SharePoint site</param>
+        /// <param name="overwrite">If true, overwrites existing folder at destination. If false, throws error if folder exists.</param>
+        /// <example>
+        /// // Rename a folder in place
+        /// ETCDirectory.Move("ClientA/OldFolderName", "ClientA/NewFolderName", site);
+        /// 
+        /// // Move a folder to a different parent
+        /// ETCDirectory.Move("ClientA/Reports", "ClientB/Reports", site);
+        /// 
+        /// // Move with overwrite if destination exists
+        /// ETCDirectory.Move("ClientA/Draft", "ClientA/Final", site, overwrite: true);
+        /// </example>
+        public static void Move(string sourcePath, string destinationPath, SharePointSite site, bool overwrite = false)
+        {
+            var client = ETCFile.GetClientInternal(site);
+            RunAsync(() => client.RenameFolderAsync(NormalizePath(sourcePath), NormalizePath(destinationPath), overwrite));
+        }
+
         private static string NormalizePath(string path)
         {
             if (string.IsNullOrWhiteSpace(path))
