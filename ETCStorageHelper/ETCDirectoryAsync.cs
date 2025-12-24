@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using ETCStorageHelper.Caching;
 using ETCStorageHelper.SharePoint;
@@ -147,11 +149,20 @@ namespace ETCStorageHelper
         /// </summary>
         /// <param name="path">Directory path</param>
         /// <param name="site">SharePoint site to list from</param>
-        /// <returns>Task that returns array of file names</returns>
-        public static async Task<string[]> GetFilesAsync(string path, SharePointSite site)
+        /// <param name="searchPattern">Optional wildcard pattern to filter files (e.g., "*.pdf", "report*", "*.txt"). If null or empty, returns all files.</param>
+        /// <returns>Task that returns array of file names matching the search pattern</returns>
+        public static async Task<string[]> GetFilesAsync(string path, SharePointSite site, string searchPattern = null)
         {
-            // For now, return all entries. Could be enhanced to filter files only.
-            return await GetFileSystemEntriesAsync(path, site);
+            var entries = await GetFileSystemEntriesAsync(path, site);
+            
+            // If no search pattern provided, return all entries
+            if (string.IsNullOrWhiteSpace(searchPattern))
+            {
+                return entries;
+            }
+            
+            // Filter entries using wildcard matching
+            return entries.Where(entry => MatchesWildcard(Path.GetFileName(entry), searchPattern)).ToArray();
         }
 
         /// <summary>
@@ -218,6 +229,24 @@ namespace ETCStorageHelper
                 }
                 return _uploadQueues[site.Name];
             }
+        }
+
+        /// <summary>
+        /// Matches a filename against a wildcard pattern (supports * and ?)
+        /// </summary>
+        private static bool MatchesWildcard(string fileName, string pattern)
+        {
+            if (string.IsNullOrEmpty(fileName) || string.IsNullOrEmpty(pattern))
+                return false;
+
+            // Convert wildcard pattern to regex
+            // Escape special regex characters, then convert * to .* and ? to .
+            string regexPattern = "^" + System.Text.RegularExpressions.Regex.Escape(pattern)
+                .Replace("\\*", ".*")
+                .Replace("\\?", ".") + "$";
+
+            return System.Text.RegularExpressions.Regex.IsMatch(fileName, regexPattern, 
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         }
 
         #endregion
