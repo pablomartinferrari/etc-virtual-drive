@@ -75,7 +75,7 @@ namespace ETCStorageHelper
             site.Validate();
 
             var client = ETCFile.GetOrCreateClient(site);
-            return await client.DirectoryExistsAsync(path);
+            return await client.DirectoryExistsAsync(NormalizePath(path));
         }
 
         /// <summary>
@@ -139,7 +139,7 @@ namespace ETCStorageHelper
             site.Validate();
 
             var client = ETCFile.GetOrCreateClient(site);
-            var items = await client.ListDirectoryAsync(path);
+            var items = await client.ListDirectoryAsync(NormalizePath(path));
             return items.ToArray();
         }
 
@@ -188,7 +188,7 @@ namespace ETCStorageHelper
             site.Validate();
 
             var client = ETCFile.GetOrCreateClient(site);
-            var items = await client.ListDirectoryWithInfoAsync(path);
+            var items = await client.ListDirectoryWithInfoAsync(NormalizePath(path));
             
             // If no search pattern provided, return all entries
             if (string.IsNullOrWhiteSpace(searchPattern))
@@ -229,7 +229,7 @@ namespace ETCStorageHelper
             site.Validate();
 
             var client = ETCFile.GetOrCreateClient(site);
-            return await client.GetFolderUrlAsync(path);
+            return await client.GetFolderUrlAsync(NormalizePath(path));
         }
 
         /// <summary>
@@ -328,6 +328,18 @@ namespace ETCStorageHelper
                 }
                 return _uploadQueues[site.Name];
             }
+        }
+
+        /// <summary>
+        /// Normalize path for SharePoint (convert backslashes to forward slashes, trim trailing slashes)
+        /// </summary>
+        private static string NormalizePath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                return "";
+
+            // Convert backslashes to forward slashes for SharePoint
+            return path.Replace('\\', '/').Trim('/');
         }
 
         /// <summary>

@@ -1,6 +1,6 @@
 # ETC Storage Helper
 
-**Version 1.4.1** | .NET Framework 4.6
+**Version 1.4.4** | .NET Framework 4.6
 
 SharePoint storage abstraction for ETC desktop applications. Write files to SharePoint using the same familiar API as `File.ReadAllBytes` / `File.WriteAllBytes`.
 
@@ -874,6 +874,38 @@ Error: The operation has timed out. Retrying in 1023ms...
 ---
 
 ## 📝 Version History
+
+### v1.4.4 (December 2025)
+
+- 🐛 **Bug Fix: Large File Upload Timeout** - Fixed timeout handling for chunked uploads
+- ✅ Uses `CancellationToken` for per-operation timeouts instead of modifying `HttpClient.Timeout`
+- ✅ Fixes "Properties can only be modified before sending the first request" error
+- ✅ Large files (>4MB) upload correctly with custom timeouts
+- ✅ Proper .NET pattern for HttpClient timeout handling
+- ✅ No API changes - fully backward compatible
+
+### v1.4.3 (December 2025)
+
+- 🐛 **Bug Fix: HttpClient Connection Pooling** - Proper connection management for production stability
+- ✅ Reuses single HttpClient instance across all requests
+- ✅ Eliminates TCP connection exhaustion ("connection closed unexpectedly" errors)
+- ✅ Prevents port exhaustion under high-volume workloads
+- ✅ Significantly improved performance under concurrent load
+- ✅ Follows .NET HttpClient best practices (avoid `using` with HttpClient)
+- ✅ Auth tokens refreshed per-request (handles token expiration correctly)
+- ✅ More stable for production environments
+- ✅ No API changes - fully backward compatible
+
+### v1.4.2 (December 2025)
+
+- 🐛 **Bug Fix: Path Normalization** - Fixed inconsistency between sync and async directory methods
+- ✅ Async methods now normalize paths identically to sync methods
+- ✅ Prevents malformed paths when using Windows-style backslashes (e.g., `ClientA\\Job001`)
+- ✅ Prevents double slashes from trailing slash inputs (e.g., `path//file.txt`)
+- ✅ Fixed methods: `GetFilesWithInfoAsync`, `GetFileSystemEntriesAsync`, `ExistsAsync`, `GetFolderUrlAsync`
+- ✅ `FileItemInfo.FullPath` now always properly normalized with forward slashes
+- ✅ Cross-platform consistency - Windows paths work correctly
+- ✅ No API changes - fully backward compatible
 
 ### v1.4.1 (December 2025)
 

@@ -67,7 +67,7 @@
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="distrubute\ETCStorageHelper.1.4.1.nupkg" />
+    <None Include="distrubute\ETCStorageHelper.1.4.4.nupkg" />
     <None Include="packages.config" />
   </ItemGroup>
   <ItemGroup />

@@ -23,6 +23,7 @@ namespace ETCStorageHelper.SharePoint
         private readonly RetryPolicy _retryPolicy;
         private string _siteId;
         private string _driveId;
+        private readonly HttpClient _httpClient; // Reusable HttpClient instance
 
         /// <summary>
         /// Gets the Graph API base URL (e.g., https://graph.microsoft.com or https://graph.microsoft.us)
@@ -38,6 +39,9 @@ namespace ETCStorageHelper.SharePoint
                 initialDelayMs: 2000,    // Increased from 1000ms for better network recovery
                 maxDelayMs: 60000        // Increased from 30000ms for severe issues
             );
+            
+            // Create single reusable HttpClient instance (fixes connection exhaustion)
+            _httpClient = CreateHttpClient();
         }
 
         /// <summary>
@@ -50,26 +54,24 @@ namespace ETCStorageHelper.SharePoint
 
             await _retryPolicy.ExecuteAsync(async () =>
             {
-                var token = await _authManager.GetAccessTokenAsync();
+                await SetAuthHeaderAsync();
+                
+                // Parse site URL
+                var uri = new Uri(_config.SiteUrl);
+                var hostname = uri.Host;
+                var sitePath = uri.AbsolutePath; // e.g., /sites/etc-dev-projects
 
-                using (var client = CreateHttpClient(token))
-                {
-                    // Parse site URL
-                    var uri = new Uri(_config.SiteUrl);
-                    var hostname = uri.Host;
-                    var sitePath = uri.AbsolutePath; // e.g., /sites/etc-dev-projects
-
-                    // Get site ID
-                    var graphSiteUrl = $"{GraphUrl}/sites/{hostname}:{sitePath}";
-                    Console.WriteLine($"[SharePoint] Environment: {_config.Environment}");
-                    Console.WriteLine($"[SharePoint] Graph Base URL: {_config.GraphBaseUrl}");
-                    Console.WriteLine($"[SharePoint] Site URL from config: {_config.SiteUrl}");
-                    Console.WriteLine($"[SharePoint] Parsed hostname: {hostname}");
-                    Console.WriteLine($"[SharePoint] Parsed site path: {sitePath}");
-                    Console.WriteLine($"[SharePoint] Calling Graph API: {graphSiteUrl}");
-                    System.Diagnostics.Debug.WriteLine($"[SharePointClient] Graph URL: {graphSiteUrl}");
-                    
-                    var siteResponse = await client.GetAsync(graphSiteUrl);
+                // Get site ID
+                var graphSiteUrl = $"{GraphUrl}/sites/{hostname}:{sitePath}";
+                Console.WriteLine($"[SharePoint] Environment: {_config.Environment}");
+                Console.WriteLine($"[SharePoint] Graph Base URL: {_config.GraphBaseUrl}");
+                Console.WriteLine($"[SharePoint] Site URL from config: {_config.SiteUrl}");
+                Console.WriteLine($"[SharePoint] Parsed hostname: {hostname}");
+                Console.WriteLine($"[SharePoint] Parsed site path: {sitePath}");
+                Console.WriteLine($"[SharePoint] Calling Graph API: {graphSiteUrl}");
+                System.Diagnostics.Debug.WriteLine($"[SharePointClient] Graph URL: {graphSiteUrl}");
+                
+                var siteResponse = await _httpClient.GetAsync(graphSiteUrl);
                     if (!siteResponse.IsSuccessStatusCode)
                     {
                         var error = await siteResponse.Content.ReadAsStringAsync();
@@ -88,12 +90,12 @@ namespace ETCStorageHelper.SharePoint
                         throw new Exception(errorMessage);
                     }
 
-                    var siteJson = JObject.Parse(await siteResponse.Content.ReadAsStringAsync());
-                    _siteId = siteJson["id"].Value<string>();
+                var siteJson = JObject.Parse(await siteResponse.Content.ReadAsStringAsync());
+                _siteId = siteJson["id"].Value<string>();
 
-                    // Get drive ID (document library)
-                    var drivesResponse = await client.GetAsync($"{GraphUrl}/sites/{_siteId}/drives");
-                    if (!drivesResponse.IsSuccessStatusCode)
+                // Get drive ID (document library)
+                var drivesResponse = await _httpClient.GetAsync($"{GraphUrl}/sites/{_siteId}/drives");
+                if (!drivesResponse.IsSuccessStatusCode)
                     {
                         var error = await drivesResponse.Content.ReadAsStringAsync();
                         throw new Exception($"Failed to get drives: {drivesResponse.StatusCode} - {error}");
@@ -117,7 +119,6 @@ namespace ETCStorageHelper.SharePoint
                     }
 
                     _driveId = drive["id"].Value<string>();
-                }
             }, "Initialize SharePoint connection");
         }
 
@@ -149,19 +150,17 @@ namespace ETCStorageHelper.SharePoint
         {
             await _retryPolicy.ExecuteAsync(async () =>
             {
-                var token = await _authManager.GetAccessTokenAsync();
-                using (var client = CreateHttpClient(token))
-                {
-                    var url = $"{GraphUrl}/drives/{_driveId}/root:/{path}:/content";
-                    
-                    var content = new ByteArrayContent(data);
-                    var response = await client.PutAsync(url, content);
+                await SetAuthHeaderAsync();
+                
+                var url = $"{GraphUrl}/drives/{_driveId}/root:/{path}:/content";
+                
+                var content = new ByteArrayContent(data);
+                var response = await _httpClient.PutAsync(url, content);
 
-                    if (!response.IsSuccessStatusCode)
-                    {
-                        var error = await response.Content.ReadAsStringAsync();
-                        throw new Exception($"Failed to upload file '{path}': {response.StatusCode} - {error}");
-                    }
+                if (!response.IsSuccessStatusCode)
+                {
+                    var error = await response.Content.ReadAsStringAsync();
+                    throw new Exception($"Failed to upload file '{path}': {response.StatusCode} - {error}");
                 }
             }, $"Upload file '{path}'");
         }
@@ -173,19 +172,22 @@ namespace ETCStorageHelper.SharePoint
         {
             await _retryPolicy.ExecuteAsync(async () =>
             {
-                var token = await _authManager.GetAccessTokenAsync();
-                using (var client = CreateHttpClient(token))
+                await SetAuthHeaderAsync();
+                
+                // Calculate timeout for large files based on file size
+                // Assume 1 MB/sec minimum upload speed, plus overhead
+                var fileSizeMB = data.Length / 1024.0 / 1024.0;
+                var calculatedTimeoutSeconds = Math.Max(
+                    _config.TimeoutSeconds * 5,  // Increased from 3x to 5x
+                    (int)((fileSizeMB * 10) + 180)  // 10 seconds per MB + 3 min overhead
+                );
+                
+                // Use CancellationToken for timeout instead of modifying HttpClient.Timeout
+                // (HttpClient properties can't be modified after first request)
+                using (var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(calculatedTimeoutSeconds)))
                 {
-                    // Increase timeout for large files - calculate based on file size
-                    // Assume 1 MB/sec minimum upload speed, plus overhead
-                    var fileSizeMB = data.Length / 1024.0 / 1024.0;
-                    var calculatedTimeout = Math.Max(
-                        _config.TimeoutSeconds * 3,
-                        (int)(fileSizeMB + 120)  // File size in seconds + 2 min overhead
-                    );
-                    client.Timeout = TimeSpan.FromSeconds(calculatedTimeout);
                     System.Diagnostics.Debug.WriteLine(
-                        $"[SharePointClient] Large file upload timeout set to {calculatedTimeout}s for {fileSizeMB:F1} MB file");
+                        $"[SharePointClient] Large file upload timeout set to {calculatedTimeoutSeconds}s for {fileSizeMB:F1} MB file");
 
                     // Step 1: Create upload session
                     var sessionUrl = $"{GraphUrl}/drives/{_driveId}/root:/{path}:/createUploadSession";
@@ -198,7 +200,7 @@ namespace ETCStorageHelper.SharePoint
                     };
 
                     var sessionContent = new StringContent(sessionBody.ToString(), Encoding.UTF8, "application/json");
-                    var sessionResponse = await client.PostAsync(sessionUrl, sessionContent);
+                    var sessionResponse = await _httpClient.PostAsync(sessionUrl, sessionContent, cts.Token);
 
                     if (!sessionResponse.IsSuccessStatusCode)
                     {
@@ -229,7 +231,7 @@ namespace ETCStorageHelper.SharePoint
                             totalBytes
                         );
 
-                        var chunkResponse = await client.PutAsync(uploadUrl, chunkContent);
+                        var chunkResponse = await _httpClient.PutAsync(uploadUrl, chunkContent, cts.Token);
 
                         if (!chunkResponse.IsSuccessStatusCode)
                         {
@@ -257,31 +259,29 @@ namespace ETCStorageHelper.SharePoint
             
             return await _retryPolicy.ExecuteAsync(async () =>
             {
-                var token = await _authManager.GetAccessTokenAsync();
-                using (var client = CreateHttpClient(token))
+                await SetAuthHeaderAsync();
+                
+                // First, get the file metadata to get the download URL
+                var url = $"{GraphUrl}/drives/{_driveId}/root:/{path}";
+                var response = await _httpClient.GetAsync(url);
+
+                if (!response.IsSuccessStatusCode)
                 {
-                    // First, get the file metadata to get the download URL
-                    var url = $"{GraphUrl}/drives/{_driveId}/root:/{path}";
-                    var response = await client.GetAsync(url);
-
-                    if (!response.IsSuccessStatusCode)
-                    {
-                        var error = await response.Content.ReadAsStringAsync();
-                        throw new FileNotFoundException($"File '{path}' not found: {response.StatusCode} - {error}");
-                    }
-
-                    var json = JObject.Parse(await response.Content.ReadAsStringAsync());
-                    var downloadUrl = json["@microsoft.graph.downloadUrl"].Value<string>();
-
-                    // Download the file content
-                    var downloadResponse = await client.GetAsync(downloadUrl);
-                    if (!downloadResponse.IsSuccessStatusCode)
-                    {
-                        throw new Exception($"Failed to download file '{path}': {downloadResponse.StatusCode}");
-                    }
-
-                    return await downloadResponse.Content.ReadAsByteArrayAsync();
+                    var error = await response.Content.ReadAsStringAsync();
+                    throw new FileNotFoundException($"File '{path}' not found: {response.StatusCode} - {error}");
                 }
+
+                var json = JObject.Parse(await response.Content.ReadAsStringAsync());
+                var downloadUrl = json["@microsoft.graph.downloadUrl"].Value<string>();
+
+                // Download the file content
+                var downloadResponse = await _httpClient.GetAsync(downloadUrl);
+                if (!downloadResponse.IsSuccessStatusCode)
+                {
+                    throw new Exception($"Failed to download file '{path}': {downloadResponse.StatusCode}");
+                }
+
+                return await downloadResponse.Content.ReadAsByteArrayAsync();
             }, $"Download file '{path}'");
         }
 
@@ -292,14 +292,12 @@ namespace ETCStorageHelper.SharePoint
         {
             await InitializeAsync();
             
-            var token = await _authManager.GetAccessTokenAsync();
-            using (var client = CreateHttpClient(token))
-            {
-                var url = $"{GraphUrl}/drives/{_driveId}/root:/{path}";
-                var response = await client.GetAsync(url);
+            await SetAuthHeaderAsync();
+            
+            var url = $"{GraphUrl}/drives/{_driveId}/root:/{path}";
+            var response = await _httpClient.GetAsync(url);
 
-                return response.IsSuccessStatusCode;
-            }
+            return response.IsSuccessStatusCode;
         }
 
         /// <summary>
@@ -309,17 +307,15 @@ namespace ETCStorageHelper.SharePoint
         {
             await InitializeAsync();
             
-            var token = await _authManager.GetAccessTokenAsync();
-            using (var client = CreateHttpClient(token))
-            {
-                var url = $"{GraphUrl}/drives/{_driveId}/root:/{path}";
-                var response = await client.DeleteAsync(url);
+            await SetAuthHeaderAsync();
+            
+            var url = $"{GraphUrl}/drives/{_driveId}/root:/{path}";
+            var response = await _httpClient.DeleteAsync(url);
 
-                if (!response.IsSuccessStatusCode && response.StatusCode != System.Net.HttpStatusCode.NotFound)
-                {
-                    var error = await response.Content.ReadAsStringAsync();
-                    throw new Exception($"Failed to delete file '{path}': {response.StatusCode} - {error}");
-                }
+            if (!response.IsSuccessStatusCode && response.StatusCode != System.Net.HttpStatusCode.NotFound)
+            {
+                var error = await response.Content.ReadAsStringAsync();
+                throw new Exception($"Failed to delete file '{path}': {response.StatusCode} - {error}");
             }
         }
 
@@ -330,17 +326,15 @@ namespace ETCStorageHelper.SharePoint
         {
             await InitializeAsync();
             
-            var token = await _authManager.GetAccessTokenAsync();
-            using (var client = CreateHttpClient(token))
-            {
-                var url = $"{GraphUrl}/drives/{_driveId}/root:/{path}";
-                var response = await client.DeleteAsync(url);
+            await SetAuthHeaderAsync();
+            
+            var url = $"{GraphUrl}/drives/{_driveId}/root:/{path}";
+            var response = await _httpClient.DeleteAsync(url);
 
-                if (!response.IsSuccessStatusCode && response.StatusCode != System.Net.HttpStatusCode.NotFound)
-                {
-                    var error = await response.Content.ReadAsStringAsync();
-                    throw new Exception($"Failed to delete folder '{path}': {response.StatusCode} - {error}");
-                }
+            if (!response.IsSuccessStatusCode && response.StatusCode != System.Net.HttpStatusCode.NotFound)
+            {
+                var error = await response.Content.ReadAsStringAsync();
+                throw new Exception($"Failed to delete folder '{path}': {response.StatusCode} - {error}");
             }
         }
 
@@ -353,47 +347,45 @@ namespace ETCStorageHelper.SharePoint
             
             await _retryPolicy.ExecuteAsync(async () =>
             {
-                var token = await _authManager.GetAccessTokenAsync();
-                using (var client = CreateHttpClient(token))
+                await SetAuthHeaderAsync();
+                
+                var pathParts = path.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
+                var currentPath = "";
+
+                foreach (var part in pathParts)
                 {
-                    var pathParts = path.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
-                    var currentPath = "";
+                    var parentPath = currentPath;
+                    currentPath = string.IsNullOrEmpty(currentPath) ? part : $"{currentPath}/{part}";
 
-                    foreach (var part in pathParts)
+                    // Check if folder exists
+                    var checkUrl = $"{GraphUrl}/drives/{_driveId}/root:/{currentPath}";
+                    var checkResponse = await _httpClient.GetAsync(checkUrl);
+
+                    if (checkResponse.IsSuccessStatusCode)
+                        continue; // Folder already exists
+
+                    // Create folder
+                    var createUrl = string.IsNullOrEmpty(parentPath)
+                        ? $"{GraphUrl}/drives/{_driveId}/root/children"
+                        : $"{GraphUrl}/drives/{_driveId}/root:/{parentPath}:/children";
+
+                    var folderData = new JObject
                     {
-                        var parentPath = currentPath;
-                        currentPath = string.IsNullOrEmpty(currentPath) ? part : $"{currentPath}/{part}";
+                        ["name"] = part,
+                        ["folder"] = new JObject(),
+                        ["@microsoft.graph.conflictBehavior"] = "rename"
+                    };
 
-                        // Check if folder exists
-                        var checkUrl = $"{GraphUrl}/drives/{_driveId}/root:/{currentPath}";
-                        var checkResponse = await client.GetAsync(checkUrl);
+                    var content = new StringContent(folderData.ToString(), Encoding.UTF8, "application/json");
+                    var createResponse = await _httpClient.PostAsync(createUrl, content);
 
-                        if (checkResponse.IsSuccessStatusCode)
-                            continue; // Folder already exists
-
-                        // Create folder
-                        var createUrl = string.IsNullOrEmpty(parentPath)
-                            ? $"{GraphUrl}/drives/{_driveId}/root/children"
-                            : $"{GraphUrl}/drives/{_driveId}/root:/{parentPath}:/children";
-
-                        var folderData = new JObject
+                    if (!createResponse.IsSuccessStatusCode)
+                    {
+                        var error = await createResponse.Content.ReadAsStringAsync();
+                        // Ignore conflict errors (folder might have been created by another process)
+                        if (!error.Contains("nameAlreadyExists"))
                         {
-                            ["name"] = part,
-                            ["folder"] = new JObject(),
-                            ["@microsoft.graph.conflictBehavior"] = "rename"
-                        };
-
-                        var content = new StringContent(folderData.ToString(), Encoding.UTF8, "application/json");
-                        var createResponse = await client.PostAsync(createUrl, content);
-
-                        if (!createResponse.IsSuccessStatusCode)
-                        {
-                            var error = await createResponse.Content.ReadAsStringAsync();
-                            // Ignore conflict errors (folder might have been created by another process)
-                            if (!error.Contains("nameAlreadyExists"))
-                            {
-                                throw new Exception($"Failed to create folder '{currentPath}': {createResponse.StatusCode} - {error}");
-                            }
+                            throw new Exception($"Failed to create folder '{currentPath}': {createResponse.StatusCode} - {error}");
                         }
                     }
                 }
@@ -407,18 +399,16 @@ namespace ETCStorageHelper.SharePoint
         {
             await InitializeAsync();
             
-            var token = await _authManager.GetAccessTokenAsync();
-            using (var client = CreateHttpClient(token))
-            {
-                var url = $"{GraphUrl}/drives/{_driveId}/root:/{path}";
-                var response = await client.GetAsync(url);
+            await SetAuthHeaderAsync();
+            
+            var url = $"{GraphUrl}/drives/{_driveId}/root:/{path}";
+            var response = await _httpClient.GetAsync(url);
 
-                if (!response.IsSuccessStatusCode)
-                    return false;
+            if (!response.IsSuccessStatusCode)
+                return false;
 
-                var json = JObject.Parse(await response.Content.ReadAsStringAsync());
-                return json["folder"] != null; // It's a folder if "folder" property exists
-            }
+            var json = JObject.Parse(await response.Content.ReadAsStringAsync());
+            return json["folder"] != null; // It's a folder if "folder" property exists
         }
 
         /// <summary>
@@ -428,26 +418,24 @@ namespace ETCStorageHelper.SharePoint
         {
             await InitializeAsync();
             
-            var token = await _authManager.GetAccessTokenAsync();
-            using (var client = CreateHttpClient(token))
+            await SetAuthHeaderAsync();
+            
+            var url = string.IsNullOrEmpty(path)
+                ? $"{GraphUrl}/drives/{_driveId}/root/children"
+                : $"{GraphUrl}/drives/{_driveId}/root:/{path}:/children";
+
+            var response = await _httpClient.GetAsync(url);
+
+            if (!response.IsSuccessStatusCode)
             {
-                var url = string.IsNullOrEmpty(path)
-                    ? $"{GraphUrl}/drives/{_driveId}/root/children"
-                    : $"{GraphUrl}/drives/{_driveId}/root:/{path}:/children";
-
-                var response = await client.GetAsync(url);
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    var error = await response.Content.ReadAsStringAsync();
-                    throw new DirectoryNotFoundException($"Directory '{path}' not found: {response.StatusCode} - {error}");
-                }
-
-                var json = JObject.Parse(await response.Content.ReadAsStringAsync());
-                var items = json["value"].Children<JObject>();
-                
-                return items.Select(item => item["name"].Value<string>()).ToList();
+                var error = await response.Content.ReadAsStringAsync();
+                throw new DirectoryNotFoundException($"Directory '{path}' not found: {response.StatusCode} - {error}");
             }
+
+            var json = JObject.Parse(await response.Content.ReadAsStringAsync());
+            var items = json["value"].Children<JObject>();
+            
+            return items.Select(item => item["name"].Value<string>()).ToList();
         }
 
         /// <summary>
@@ -457,57 +445,55 @@ namespace ETCStorageHelper.SharePoint
         {
             await InitializeAsync();
             
-            var token = await _authManager.GetAccessTokenAsync();
-            using (var client = CreateHttpClient(token))
+            await SetAuthHeaderAsync();
+            
+            var url = string.IsNullOrEmpty(path)
+                ? $"{GraphUrl}/drives/{_driveId}/root/children"
+                : $"{GraphUrl}/drives/{_driveId}/root:/{path}:/children";
+
+            var response = await _httpClient.GetAsync(url);
+
+            if (!response.IsSuccessStatusCode)
             {
-                var url = string.IsNullOrEmpty(path)
-                    ? $"{GraphUrl}/drives/{_driveId}/root/children"
-                    : $"{GraphUrl}/drives/{_driveId}/root:/{path}:/children";
-
-                var response = await client.GetAsync(url);
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    var error = await response.Content.ReadAsStringAsync();
-                    throw new DirectoryNotFoundException($"Directory '{path}' not found: {response.StatusCode} - {error}");
-                }
-
-                var json = JObject.Parse(await response.Content.ReadAsStringAsync());
-                var items = json["value"].Children<JObject>();
-                
-                var fileInfos = new List<ETCFileInfo>();
-                foreach (var item in items)
-                {
-                    var fileInfo = new ETCFileInfo
-                    {
-                        Name = item["name"]?.Value<string>() ?? "",
-                        IsFolder = item["folder"] != null,
-                        FullPath = string.IsNullOrEmpty(path) 
-                            ? item["name"]?.Value<string>() ?? ""
-                            : $"{path}/{item["name"]?.Value<string>() ?? ""}"
-                    };
-
-                    // Parse last modified date
-                    if (item["lastModifiedDateTime"] != null)
-                    {
-                        var dateStr = item["lastModifiedDateTime"].Value<string>();
-                        if (DateTime.TryParse(dateStr, out DateTime lastModified))
-                        {
-                            fileInfo.LastModified = lastModified.ToUniversalTime();
-                        }
-                    }
-
-                    // Parse file size
-                    if (item["size"] != null && !fileInfo.IsFolder)
-                    {
-                        fileInfo.Size = item["size"].Value<long>();
-                    }
-
-                    fileInfos.Add(fileInfo);
-                }
-                
-                return fileInfos;
+                var error = await response.Content.ReadAsStringAsync();
+                throw new DirectoryNotFoundException($"Directory '{path}' not found: {response.StatusCode} - {error}");
             }
+
+            var json = JObject.Parse(await response.Content.ReadAsStringAsync());
+            var items = json["value"].Children<JObject>();
+            
+            var fileInfos = new List<ETCFileInfo>();
+            foreach (var item in items)
+            {
+                var fileInfo = new ETCFileInfo
+                {
+                    Name = item["name"]?.Value<string>() ?? "",
+                    IsFolder = item["folder"] != null,
+                    FullPath = string.IsNullOrEmpty(path) 
+                        ? item["name"]?.Value<string>() ?? ""
+                        : $"{path}/{item["name"]?.Value<string>() ?? ""}"
+                };
+
+                // Parse last modified date
+                if (item["lastModifiedDateTime"] != null)
+                {
+                    var dateStr = item["lastModifiedDateTime"].Value<string>();
+                    if (DateTime.TryParse(dateStr, out DateTime lastModified))
+                    {
+                        fileInfo.LastModified = lastModified.ToUniversalTime();
+                    }
+                }
+
+                // Parse file size
+                if (item["size"] != null && !fileInfo.IsFolder)
+                {
+                    fileInfo.Size = item["size"].Value<long>();
+                }
+
+                fileInfos.Add(fileInfo);
+            }
+            
+            return fileInfos;
         }
 
         /// <summary>
@@ -517,21 +503,19 @@ namespace ETCStorageHelper.SharePoint
         {
             await InitializeAsync();
             
-            var token = await _authManager.GetAccessTokenAsync();
-            using (var client = CreateHttpClient(token))
+            await SetAuthHeaderAsync();
+            
+            var url = $"{GraphUrl}/drives/{_driveId}/root:/{path}";
+            var response = await _httpClient.GetAsync(url);
+
+            if (!response.IsSuccessStatusCode)
             {
-                var url = $"{GraphUrl}/drives/{_driveId}/root:/{path}";
-                var response = await client.GetAsync(url);
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    var error = await response.Content.ReadAsStringAsync();
-                    throw new FileNotFoundException($"File '{path}' not found: {response.StatusCode} - {error}");
-                }
-
-                var json = JObject.Parse(await response.Content.ReadAsStringAsync());
-                return json["webUrl"].Value<string>();
+                var error = await response.Content.ReadAsStringAsync();
+                throw new FileNotFoundException($"File '{path}' not found: {response.StatusCode} - {error}");
             }
+
+            var json = JObject.Parse(await response.Content.ReadAsStringAsync());
+            return json["webUrl"].Value<string>();
         }
 
         /// <summary>
@@ -541,24 +525,22 @@ namespace ETCStorageHelper.SharePoint
         {
             await InitializeAsync();
             
-            var token = await _authManager.GetAccessTokenAsync();
-            using (var client = CreateHttpClient(token))
+            await SetAuthHeaderAsync();
+            
+            var url = string.IsNullOrEmpty(path)
+                ? $"{GraphUrl}/drives/{_driveId}/root"
+                : $"{GraphUrl}/drives/{_driveId}/root:/{path}";
+
+            var response = await _httpClient.GetAsync(url);
+
+            if (!response.IsSuccessStatusCode)
             {
-                var url = string.IsNullOrEmpty(path)
-                    ? $"{GraphUrl}/drives/{_driveId}/root"
-                    : $"{GraphUrl}/drives/{_driveId}/root:/{path}";
-
-                var response = await client.GetAsync(url);
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    var error = await response.Content.ReadAsStringAsync();
-                    throw new DirectoryNotFoundException($"Folder '{path}' not found: {response.StatusCode} - {error}");
-                }
-
-                var json = JObject.Parse(await response.Content.ReadAsStringAsync());
-                return json["webUrl"].Value<string>();
+                var error = await response.Content.ReadAsStringAsync();
+                throw new DirectoryNotFoundException($"Folder '{path}' not found: {response.StatusCode} - {error}");
             }
+
+            var json = JObject.Parse(await response.Content.ReadAsStringAsync());
+            return json["webUrl"].Value<string>();
         }
 
         /// <summary>
@@ -573,78 +555,76 @@ namespace ETCStorageHelper.SharePoint
 
             await _retryPolicy.ExecuteAsync(async () =>
             {
-                var token = await _authManager.GetAccessTokenAsync();
-                using (var client = CreateHttpClient(token))
+                await SetAuthHeaderAsync();
+                
+                // Parse destination path into parent folder and new name
+                var destParts = destinationPath.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
+                var newName = destParts[destParts.Length - 1];
+                var parentPath = destParts.Length > 1 
+                    ? string.Join("/", destParts.Take(destParts.Length - 1))
+                    : "";
+
+                // Build the PATCH request
+                var url = $"{GraphUrl}/drives/{_driveId}/root:/{sourcePath}";
+                
+                var updateData = new JObject
                 {
-                    // Parse destination path into parent folder and new name
-                    var destParts = destinationPath.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
-                    var newName = destParts[destParts.Length - 1];
-                    var parentPath = destParts.Length > 1 
-                        ? string.Join("/", destParts.Take(destParts.Length - 1))
-                        : "";
+                    ["name"] = newName
+                };
 
-                    // Build the PATCH request
-                    var url = $"{GraphUrl}/drives/{_driveId}/root:/{sourcePath}";
+                // Set conflict behavior (mimics System.IO.Directory.Move behavior)
+                if (overwriteIfExists)
+                {
+                    updateData["@microsoft.graph.conflictBehavior"] = "replace";
+                }
+                else
+                {
+                    updateData["@microsoft.graph.conflictBehavior"] = "fail";
+                }
+
+                // If moving to a different parent folder, include parentReference
+                if (!string.IsNullOrEmpty(parentPath))
+                {
+                    // Get the parent folder's ID
+                    var parentUrl = $"{GraphUrl}/drives/{_driveId}/root:/{parentPath}";
+                    var parentResponse = await _httpClient.GetAsync(parentUrl);
                     
-                    var updateData = new JObject
+                    if (!parentResponse.IsSuccessStatusCode)
                     {
-                        ["name"] = newName
+                        var parentError = await parentResponse.Content.ReadAsStringAsync();
+                        throw new DirectoryNotFoundException($"Destination parent folder '{parentPath}' not found: {parentResponse.StatusCode} - {parentError}");
+                    }
+
+                    var parentJson = JObject.Parse(await parentResponse.Content.ReadAsStringAsync());
+                    var parentId = parentJson["id"].Value<string>();
+
+                    updateData["parentReference"] = new JObject
+                    {
+                        ["id"] = parentId
                     };
-
-                    // Set conflict behavior (mimics System.IO.Directory.Move behavior)
-                    if (overwriteIfExists)
+                }
+                else
+                {
+                    // Moving to root - set parent to the drive root
+                    updateData["parentReference"] = new JObject
                     {
-                        updateData["@microsoft.graph.conflictBehavior"] = "replace";
-                    }
-                    else
-                    {
-                        updateData["@microsoft.graph.conflictBehavior"] = "fail";
-                    }
-
-                    // If moving to a different parent folder, include parentReference
-                    if (!string.IsNullOrEmpty(parentPath))
-                    {
-                        // Get the parent folder's ID
-                        var parentUrl = $"{GraphUrl}/drives/{_driveId}/root:/{parentPath}";
-                        var parentResponse = await client.GetAsync(parentUrl);
-                        
-                        if (!parentResponse.IsSuccessStatusCode)
-                        {
-                            var parentError = await parentResponse.Content.ReadAsStringAsync();
-                            throw new DirectoryNotFoundException($"Destination parent folder '{parentPath}' not found: {parentResponse.StatusCode} - {parentError}");
-                        }
-
-                        var parentJson = JObject.Parse(await parentResponse.Content.ReadAsStringAsync());
-                        var parentId = parentJson["id"].Value<string>();
-
-                        updateData["parentReference"] = new JObject
-                        {
-                            ["id"] = parentId
-                        };
-                    }
-                    else
-                    {
-                        // Moving to root - set parent to the drive root
-                        updateData["parentReference"] = new JObject
-                        {
-                            ["id"] = _driveId,
-                            ["path"] = $"/drives/{_driveId}/root"
-                        };
-                    }
-
-                    var content = new StringContent(updateData.ToString(), Encoding.UTF8, "application/json");
-                    var request = new HttpRequestMessage(new HttpMethod("PATCH"), url)
-                    {
-                        Content = content
+                        ["id"] = _driveId,
+                        ["path"] = $"/drives/{_driveId}/root"
                     };
+                }
 
-                    var response = await client.SendAsync(request);
+                var content = new StringContent(updateData.ToString(), Encoding.UTF8, "application/json");
+                var request = new HttpRequestMessage(new HttpMethod("PATCH"), url)
+                {
+                    Content = content
+                };
 
-                    if (!response.IsSuccessStatusCode)
-                    {
-                        var error = await response.Content.ReadAsStringAsync();
-                        throw new Exception($"Failed to rename/move folder from '{sourcePath}' to '{destinationPath}': {response.StatusCode} - {error}");
-                    }
+                var response = await _httpClient.SendAsync(request);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    var error = await response.Content.ReadAsStringAsync();
+                    throw new Exception($"Failed to rename/move folder from '{sourcePath}' to '{destinationPath}': {response.StatusCode} - {error}");
                 }
             }, $"Rename/move folder from '{sourcePath}' to '{destinationPath}'");
         }
@@ -661,83 +641,84 @@ namespace ETCStorageHelper.SharePoint
 
             await _retryPolicy.ExecuteAsync(async () =>
             {
-                var token = await _authManager.GetAccessTokenAsync();
-                using (var client = CreateHttpClient(token))
+                await SetAuthHeaderAsync();
+                
+                // Parse destination path into parent folder and new name
+                var destParts = destinationPath.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
+                var newName = destParts[destParts.Length - 1];
+                var parentPath = destParts.Length > 1 
+                    ? string.Join("/", destParts.Take(destParts.Length - 1))
+                    : "";
+
+                // Build the PATCH request
+                var url = $"{GraphUrl}/drives/{_driveId}/root:/{sourcePath}";
+                
+                var updateData = new JObject
                 {
-                    // Parse destination path into parent folder and new name
-                    var destParts = destinationPath.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
-                    var newName = destParts[destParts.Length - 1];
-                    var parentPath = destParts.Length > 1 
-                        ? string.Join("/", destParts.Take(destParts.Length - 1))
-                        : "";
+                    ["name"] = newName
+                };
 
-                    // Build the PATCH request
-                    var url = $"{GraphUrl}/drives/{_driveId}/root:/{sourcePath}";
+                // Set conflict behavior (mimics System.IO.File.Move behavior)
+                if (overwriteIfExists)
+                {
+                    updateData["@microsoft.graph.conflictBehavior"] = "replace";
+                }
+                else
+                {
+                    updateData["@microsoft.graph.conflictBehavior"] = "fail";
+                }
+
+                // If moving to a different parent folder, include parentReference
+                if (!string.IsNullOrEmpty(parentPath))
+                {
+                    // Get the parent folder's ID
+                    var parentUrl = $"{GraphUrl}/drives/{_driveId}/root:/{parentPath}";
+                    var parentResponse = await _httpClient.GetAsync(parentUrl);
                     
-                    var updateData = new JObject
+                    if (!parentResponse.IsSuccessStatusCode)
                     {
-                        ["name"] = newName
+                        var parentError = await parentResponse.Content.ReadAsStringAsync();
+                        throw new DirectoryNotFoundException($"Destination parent folder '{parentPath}' not found: {parentResponse.StatusCode} - {parentError}");
+                    }
+
+                    var parentJson = JObject.Parse(await parentResponse.Content.ReadAsStringAsync());
+                    var parentId = parentJson["id"].Value<string>();
+
+                    updateData["parentReference"] = new JObject
+                    {
+                        ["id"] = parentId
                     };
-
-                    // Set conflict behavior (mimics System.IO.File.Move behavior)
-                    if (overwriteIfExists)
+                }
+                else
+                {
+                    // Moving to root - set parent to the drive root
+                    updateData["parentReference"] = new JObject
                     {
-                        updateData["@microsoft.graph.conflictBehavior"] = "replace";
-                    }
-                    else
-                    {
-                        updateData["@microsoft.graph.conflictBehavior"] = "fail";
-                    }
-
-                    // If moving to a different parent folder, include parentReference
-                    if (!string.IsNullOrEmpty(parentPath))
-                    {
-                        // Get the parent folder's ID
-                        var parentUrl = $"{GraphUrl}/drives/{_driveId}/root:/{parentPath}";
-                        var parentResponse = await client.GetAsync(parentUrl);
-                        
-                        if (!parentResponse.IsSuccessStatusCode)
-                        {
-                            var parentError = await parentResponse.Content.ReadAsStringAsync();
-                            throw new DirectoryNotFoundException($"Destination parent folder '{parentPath}' not found: {parentResponse.StatusCode} - {parentError}");
-                        }
-
-                        var parentJson = JObject.Parse(await parentResponse.Content.ReadAsStringAsync());
-                        var parentId = parentJson["id"].Value<string>();
-
-                        updateData["parentReference"] = new JObject
-                        {
-                            ["id"] = parentId
-                        };
-                    }
-                    else
-                    {
-                        // Moving to root - set parent to the drive root
-                        updateData["parentReference"] = new JObject
-                        {
-                            ["id"] = _driveId,
-                            ["path"] = $"/drives/{_driveId}/root"
-                        };
-                    }
-
-                    var content = new StringContent(updateData.ToString(), Encoding.UTF8, "application/json");
-                    var request = new HttpRequestMessage(new HttpMethod("PATCH"), url)
-                    {
-                        Content = content
+                        ["id"] = _driveId,
+                        ["path"] = $"/drives/{_driveId}/root"
                     };
+                }
 
-                    var response = await client.SendAsync(request);
+                var content = new StringContent(updateData.ToString(), Encoding.UTF8, "application/json");
+                var request = new HttpRequestMessage(new HttpMethod("PATCH"), url)
+                {
+                    Content = content
+                };
 
-                    if (!response.IsSuccessStatusCode)
-                    {
-                        var error = await response.Content.ReadAsStringAsync();
-                        throw new Exception($"Failed to rename/move file from '{sourcePath}' to '{destinationPath}': {response.StatusCode} - {error}");
-                    }
+                var response = await _httpClient.SendAsync(request);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    var error = await response.Content.ReadAsStringAsync();
+                    throw new Exception($"Failed to rename/move file from '{sourcePath}' to '{destinationPath}': {response.StatusCode} - {error}");
                 }
             }, $"Rename/move file from '{sourcePath}' to '{destinationPath}'");
         }
 
-        private HttpClient CreateHttpClient(string accessToken)
+        /// <summary>
+        /// Creates a reusable HttpClient with proper connection handling
+        /// </summary>
+        private HttpClient CreateHttpClient()
         {
             // Ensure TLS 1.2 for corporate environments
             System.Net.ServicePointManager.SecurityProtocol |= System.Net.SecurityProtocolType.Tls12;
@@ -763,8 +744,17 @@ namespace ETCStorageHelper.SharePoint
                 Timeout = TimeSpan.FromSeconds(Math.Max(_config.TimeoutSeconds, 120))
             };
 
-            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            // Note: Authorization header is set per-request in SetAuthHeader()
             return client;
+        }
+
+        /// <summary>
+        /// Sets the authorization header with a fresh token (tokens can expire)
+        /// </summary>
+        private async Task SetAuthHeaderAsync()
+        {
+            var token = await _authManager.GetAccessTokenAsync();
+            _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         }
     }
 }
